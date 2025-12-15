@@ -204,4 +204,4 @@ cd backend && npm run test:watch
 
 ## License
 
-MIT
+Creative Commons Zero v1.0 Universal

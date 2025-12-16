@@ -16,8 +16,8 @@ import type {
  */
 function getBasePath(): string {
   const path = window.location.pathname;
-  // Match paths ending with /dancer or /dancer/
-  const match = path.match(/^(.*\/dancer)\/?/);
+  // Match paths containing /dancer followed by end, slash, or more path
+  const match = path.match(/^(.*\/dancer)(?:\/|$)/);
   if (match) {
     return match[1] + '/';
   }

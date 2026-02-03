@@ -212,6 +212,14 @@ npm run lock-workspace --workspace=backend unlock "My Workspace"
 npm run lock-workspace --workspace=backend show
 ```
 
+**In Docker:** Run commands directly without the workspace flag (the container only has the backend):
+
+```bash
+npm run lock-workspace list
+# or
+node dist/cli/lock-workspace.js list
+```
+
 ## Testing
 
 ```bash

@@ -13,8 +13,8 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import initSqlJs from 'sql.js';
 
-const CONFIG_FILE = join(process.cwd(), 'locked-workspaces.json');
 const DATA_DIR = join(process.cwd(), 'data');
+const CONFIG_FILE = join(DATA_DIR, 'locked-workspaces.json');
 const MASTER_DB_PATH = join(DATA_DIR, '_master.db');
 
 interface LockedWorkspacesConfig {

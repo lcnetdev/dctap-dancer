@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, watchFile } from 'fs';
 import { join } from 'path';
 
-const CONFIG_FILE = join(process.cwd(), 'locked-workspaces.json');
+const DATA_DIR = join(process.cwd(), 'data');
+const CONFIG_FILE = join(DATA_DIR, 'locked-workspaces.json');
 
 interface LockedWorkspacesConfig {
   // Can specify by workspace ID (UUID) or name

@@ -41,13 +41,12 @@ function loadConfig(): void {
 // Load config on startup
 loadConfig();
 
-// Watch for changes to the config file (reload when modified)
-if (existsSync(CONFIG_FILE)) {
-  watchFile(CONFIG_FILE, { interval: 5000 }, () => {
-    console.log('locked-workspaces.json changed, reloading...');
-    loadConfig();
-  });
-}
+// Watch for changes to the config file (reload when modified or created)
+// watchFile works even if the file doesn't exist yet - it will detect creation
+watchFile(CONFIG_FILE, { interval: 5000 }, () => {
+  console.log('locked-workspaces.json changed, reloading...');
+  loadConfig();
+});
 
 export const lockedWorkspacesService = {
   /**

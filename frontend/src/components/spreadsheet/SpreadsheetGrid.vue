@@ -135,7 +135,16 @@
                   :class="{ disabled: isCellDisabled(row, col) }"
                   :title="getCellError(row, col.key) ?? undefined"
                 >
-                  <span v-for="(line, idx) in getMultilineValues(row, col.key)" :key="idx" class="multiline-value">{{ line }}</span>
+                  <span
+                    v-for="(line, idx) in getMultilineValues(row, col.key)"
+                    :key="idx"
+                    class="multiline-value"
+                  >{{ line }}<span
+                      v-if="col.key === 'valueShape' && isValidShapeRef(line)"
+                      class="shape-nav-icon"
+                      title="Go to this shape"
+                      @click.stop.prevent="promptNavigateToShape(line, $event)"
+                    >&#9998;</span></span>
                 </span>
                 <span
                   v-else
@@ -143,7 +152,12 @@
                   :class="{ disabled: isCellDisabled(row, col) }"
                   :title="getCellError(row, col.key) ?? undefined"
                 >
-                  {{ formatCellValue(row, col, rowIndex) }}
+                  {{ formatCellValue(row, col, rowIndex) }}<span
+                    v-if="col.key === 'valueShape' && getCellValue(row, col.key, rowIndex) && isValidShapeRef(getCellValue(row, col.key, rowIndex)!)"
+                    class="shape-nav-icon"
+                    title="Go to this shape"
+                    @click.stop.prevent="promptNavigateToShape(getCellValue(row, col.key, rowIndex)!, $event)"
+                  >&#9998;</span>
                 </span>
               </template>
             </td>
@@ -283,7 +297,7 @@ export default defineComponent({
       default: false
     }
   },
-  emits: ['shape-label-change', 'description-change', 'resource-uri-change'],
+  emits: ['shape-label-change', 'description-change', 'resource-uri-change', 'navigate-to-shape'],
   setup(props, { emit }) {
     const containerRef = ref<HTMLDivElement | null>(null);
     const gridWrapper = ref<HTMLDivElement | null>(null);
@@ -1294,6 +1308,18 @@ export default defineComponent({
       // Handle other redo types...
     }
 
+    function isValidShapeRef(shapeId: string): boolean {
+      return props.shapes.some(s => s.shapeId === shapeId);
+    }
+
+    function promptNavigateToShape(shapeId: string, event: Event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (confirm(`Do you want to edit the shape "${shapeId}"?`)) {
+        emit('navigate-to-shape', shapeId);
+      }
+    }
+
     function startEditDescription() {
       const newDescription = prompt('Enter shape description:', props.description || '');
       if (newDescription !== null && newDescription !== props.description) {
@@ -1433,6 +1459,8 @@ export default defineComponent({
       startEditDescription,
       showErrorTooltip,
       hideErrorTooltip,
+      isValidShapeRef,
+      promptNavigateToShape,
       // Send to workspace
       showSendToWorkspace,
       otherWorkspaces,
@@ -1715,6 +1743,25 @@ tr.row-selected td {
 
 .multiline-value:not(:last-child) {
   border-bottom: 1px dotted #ddd;
+}
+
+.shape-nav-icon {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.7rem;
+  color: #999;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  vertical-align: middle;
+}
+
+.cell:hover .shape-nav-icon {
+  opacity: 1;
+}
+
+.shape-nav-icon:hover {
+  color: #2196f3;
 }
 
 .cell-content.disabled {

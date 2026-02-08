@@ -41,6 +41,34 @@
           </button>
         </div>
         <div v-if="!sidebarCollapsed" class="sidebar-content">
+          <div class="shape-search">
+            <input
+              type="text"
+              v-model="shapeSearchQuery"
+              placeholder="Filter shapes..."
+              class="shape-search-input"
+            />
+            <span
+              v-if="shapeSearchQuery"
+              class="shape-search-clear"
+              @click="shapeSearchQuery = ''"
+            >&times;</span>
+          </div>
+
+          <!-- Recent edited shapes -->
+          <div v-if="recentEditedShapes.length > 0 && !shapeSearchQuery" class="recent-shapes">
+            <div class="recent-shapes-header">Recent</div>
+            <div
+              v-for="shapeId in recentEditedShapes"
+              :key="'recent-' + shapeId"
+              class="recent-shape-item"
+              :class="{ active: currentShapeId === shapeId }"
+              @click="selectShape(shapeId)"
+            >
+              {{ shapeId }}
+            </div>
+          </div>
+
           <div class="sidebar-buttons">
             <button
               class="btn btn-primary btn-grow"
@@ -167,6 +195,7 @@
           @shape-label-change="updateShapeLabel"
           @description-change="updateDescription"
           @resource-uri-change="updateResourceURI"
+          @navigate-to-shape="navigateToShape"
         />
       </main>
     </div>
@@ -427,10 +456,39 @@ export default defineComponent({
     const startingPointFileInput = ref<HTMLInputElement | null>(null);
     const importingStartingPoints = ref(false);
 
+    // Shape search
+    const shapeSearchQuery = ref('');
+
+    // Recent edited shapes (session only, max 5)
+    const recentEditedShapeIds = ref<string[]>([]);
+    const recentEditedShapes = computed(() => {
+      // Only show shapes that still exist
+      return recentEditedShapeIds.value.filter(id => shapes.value.some(s => s.shapeId === id));
+    });
+
+    function trackRecentShape(shapeId: string) {
+      const list = recentEditedShapeIds.value;
+      const idx = list.indexOf(shapeId);
+      if (idx !== -1) {
+        list.splice(idx, 1);
+      }
+      list.unshift(shapeId);
+      if (list.length > 5) {
+        list.pop();
+      }
+    }
+
+    function shapeMatchesSearch(shape: Shape): boolean {
+      if (!shapeSearchQuery.value) return true;
+      const query = shapeSearchQuery.value.toLowerCase();
+      return shape.shapeId.toLowerCase().includes(query) ||
+        (shape.shapeLabel || '').toLowerCase().includes(query);
+    }
+
     // Shapes at root level (no folder)
     const rootShapes = computed(() => {
       return [...shapes.value]
-        .filter(s => s.folderId === null)
+        .filter(s => s.folderId === null && shapeMatchesSearch(s))
         .sort((a, b) => a.shapeId.localeCompare(b.shapeId));
     });
 
@@ -438,7 +496,7 @@ export default defineComponent({
     const shapesByFolder = computed(() => {
       const map = new Map<number, Shape[]>();
       for (const shape of shapes.value) {
-        if (shape.folderId !== null) {
+        if (shape.folderId !== null && shapeMatchesSearch(shape)) {
           if (!map.has(shape.folderId)) {
             map.set(shape.folderId, []);
           }
@@ -452,9 +510,11 @@ export default defineComponent({
       return map;
     });
 
-    // Sorted folders
+    // Sorted folders - hide empty folders when searching
     const sortedFolders = computed(() => {
-      return [...folders.value].sort((a, b) => a.name.localeCompare(b.name));
+      const sorted = [...folders.value].sort((a, b) => a.name.localeCompare(b.name));
+      if (!shapeSearchQuery.value) return sorted;
+      return sorted.filter(f => (shapesByFolder.value.get(f.id)?.length || 0) > 0);
     });
 
     const sortedShapes = computed(() => {
@@ -534,7 +594,15 @@ export default defineComponent({
 
     function selectShape(shapeId: string) {
       currentShapeId.value = shapeId;
+      trackRecentShape(shapeId);
       router.replace({ name: 'shape', params: { id: props.id, shapeId } });
+    }
+
+    function navigateToShape(shapeId: string) {
+      const shape = shapes.value.find(s => s.shapeId === shapeId);
+      if (shape) {
+        selectShape(shapeId);
+      }
     }
 
     async function createShape() {
@@ -700,6 +768,10 @@ export default defineComponent({
     }
 
     function isFolderCollapsed(folderId: number): boolean {
+      // Auto-expand folders with matches when searching
+      if (shapeSearchQuery.value && (shapesByFolder.value.get(folderId)?.length || 0) > 0) {
+        return false;
+      }
       return !expandedFolders.value.has(folderId);
     }
 
@@ -823,6 +895,7 @@ export default defineComponent({
       showNamespaceManager,
       goHome,
       selectShape,
+      navigateToShape,
       createShape,
       editShape,
       doEditShape,
@@ -847,6 +920,10 @@ export default defineComponent({
       isFolderCollapsed,
       createFolder,
       deleteFolder,
+      // Shape search
+      shapeSearchQuery,
+      // Recent edited shapes
+      recentEditedShapes,
       // Drag and drop
       draggedShapeId,
       dragOverFolderId,
@@ -1169,6 +1246,77 @@ export default defineComponent({
 
 .btn-grow {
   flex: 1;
+}
+
+/* Shape search */
+.shape-search {
+  position: relative;
+  margin-bottom: 0.75rem;
+}
+
+.shape-search-input {
+  width: 100%;
+  padding: 0.4rem 1.75rem 0.4rem 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+
+.shape-search-input:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+.shape-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  color: #999;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.shape-search-clear:hover {
+  color: #333;
+}
+
+/* Recent edited shapes */
+.recent-shapes {
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.recent-shapes-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.25rem;
+}
+
+.recent-shape-item {
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #2c3e50;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-shape-item:hover {
+  background: #f0f0f0;
+}
+
+.recent-shape-item.active {
+  background: #e3f2fd;
+  font-weight: 500;
 }
 
 /* Root drop zone */

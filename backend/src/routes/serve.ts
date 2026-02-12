@@ -22,23 +22,92 @@ import { ApiResponse } from '../types/dctap.js';
 
 const router = Router();
 
+// Normalize a workspace name into a URL-safe slug
+function slugifyName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-') // Replace non-alphanumeric runs with a single hyphen
+    .replace(/^-+|-+$/g, '');     // Trim leading/trailing hyphens
+}
+
+// Build a map of slug -> workspace ID, using only the first workspace for duplicate slugs.
+// Returns the map and a set of slugs that have duplicates.
+function buildSlugMap(workspaces: Array<{ id: string; name: string }>) {
+  const slugToId = new Map<string, string>();
+  const duplicateSlugs = new Set<string>();
+
+  for (const ws of workspaces) {
+    const slug = slugifyName(ws.name);
+    if (!slug) continue; // skip if name normalizes to empty
+    if (slugToId.has(slug)) {
+      duplicateSlugs.add(slug);
+    } else {
+      slugToId.set(slug, ws.id);
+    }
+  }
+
+  return { slugToId, duplicateSlugs };
+}
+
 // List all workspaces available for serving
 router.get('/workspaces', (_req: Request, res: Response) => {
   const workspaces = workspaceService.list();
+  const { duplicateSlugs } = buildSlugMap(workspaces);
 
-  const workspaceList = workspaces.map(ws => ({
-    id: ws.id,
-    name: ws.name,
-    updatedAt: ws.updatedAt,
-    profileUrl: `/api/serve/${ws.id}/profile`,
-    startingPointsUrl: `/api/serve/${ws.id}/starting-points`,
-    csvUrl: `/api/serve/${ws.id}/csv`,
-    tsvUrl: `/api/serve/${ws.id}/tsv`
-  }));
+  const workspaceList = workspaces.map(ws => {
+    const slug = slugifyName(ws.name);
+    const entry: Record<string, any> = {
+      id: ws.id,
+      name: ws.name,
+      updatedAt: ws.updatedAt,
+      profileUrl: `/api/serve/${ws.id}/profile`,
+      startingPointsUrl: `/api/serve/${ws.id}/starting-points`,
+      csvUrl: `/api/serve/${ws.id}/csv`,
+      tsvUrl: `/api/serve/${ws.id}/tsv`
+    };
+
+    if (slug) {
+      entry.profileUrlAlias = `/api/serve/${slug}/profile`;
+      entry.startingPointsUrlAlias = `/api/serve/${slug}/starting-points`;
+    }
+
+    if (duplicateSlugs.has(slug)) {
+      entry.warning = `Multiple workspaces share the normalized name "${slug}". The alias URLs resolve to the first workspace encountered.`;
+    }
+
+    return entry;
+  });
 
   const response: ApiResponse = { success: true, data: workspaceList };
   res.json(response);
 });
+
+// Middleware: resolve name-based slugs to workspace IDs.
+// If the :workspaceId param is not a UUID, treat it as a slug and look up the matching workspace.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function resolveWorkspaceSlug(req: Request, _res: Response, next: NextFunction) {
+  const param = req.params.workspaceId;
+  if (UUID_RE.test(param)) {
+    return next(); // Already a UUID, nothing to resolve
+  }
+
+  // Treat param as a slug — find the first workspace whose name matches
+  const workspaces = workspaceService.list();
+  const { slugToId } = buildSlugMap(workspaces);
+  const workspaceId = slugToId.get(param);
+
+  if (!workspaceId) {
+    return next(new AppError(404, 'Workspace not found', 'WORKSPACE_NOT_FOUND'));
+  }
+
+  req.params.workspaceId = workspaceId;
+  next();
+}
+
+router.use('/:workspaceId/profile', resolveWorkspaceSlug);
+router.use('/:workspaceId/starting-points', resolveWorkspaceSlug);
 
 // Serve Marva profile JSON for a workspace
 router.get('/:workspaceId/profile', (req: Request, res: Response, next: NextFunction) => {

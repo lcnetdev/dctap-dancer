@@ -83,20 +83,19 @@ router.get('/workspaces', (_req: Request, res: Response) => {
   res.json(response);
 });
 
-// Middleware: resolve name-based slugs to workspace IDs.
+// Param middleware: resolve name-based slugs to workspace IDs.
 // If the :workspaceId param is not a UUID, treat it as a slug and look up the matching workspace.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function resolveWorkspaceSlug(req: Request, _res: Response, next: NextFunction) {
-  const param = req.params.workspaceId;
-  if (UUID_RE.test(param)) {
+router.param('workspaceId', (req: Request, _res: Response, next: NextFunction, value: string) => {
+  if (UUID_RE.test(value)) {
     return next(); // Already a UUID, nothing to resolve
   }
 
   // Treat param as a slug — find the first workspace whose name matches
   const workspaces = workspaceService.list();
   const { slugToId } = buildSlugMap(workspaces);
-  const workspaceId = slugToId.get(param);
+  const workspaceId = slugToId.get(value);
 
   if (!workspaceId) {
     return next(new AppError(404, 'Workspace not found', 'WORKSPACE_NOT_FOUND'));
@@ -104,10 +103,7 @@ function resolveWorkspaceSlug(req: Request, _res: Response, next: NextFunction) 
 
   req.params.workspaceId = workspaceId;
   next();
-}
-
-router.use('/:workspaceId/profile', resolveWorkspaceSlug);
-router.use('/:workspaceId/starting-points', resolveWorkspaceSlug);
+});
 
 // Serve Marva profile JSON for a workspace
 router.get('/:workspaceId/profile', (req: Request, res: Response, next: NextFunction) => {

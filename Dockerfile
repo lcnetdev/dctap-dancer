@@ -42,9 +42,10 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
-# Create non-root user for security
+# Create non-root user for security and install su-exec for entrypoint
 RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+    adduser -S nodejs -u 1001 && \
+    apk add --no-cache su-exec
 
 # Copy backend package files
 COPY backend/package.json ./
@@ -62,8 +63,9 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 # Create data directory for SQLite databases
 RUN mkdir -p /app/data && chown -R nodejs:nodejs /app/data
 
-# Switch to non-root user
-USER nodejs
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Expose port
 EXPOSE 3000
@@ -76,5 +78,6 @@ ENV PORT=3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
 
-# Start the server
+# Start via entrypoint (runs as root to fix permissions, then drops to nodejs)
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]

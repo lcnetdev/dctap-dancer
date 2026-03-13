@@ -317,6 +317,40 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
     }
   }
 
+  // Expand linkedShapeIds to include shapes referenced transitively via valueShape.
+  // In Marva profiles, every shape referenced by valueTemplateRefs must exist as a
+  // resourceTemplate, even if it's not directly linked from the profile's hasPart rows.
+  const profileShapeIds = new Set(profileShapes.map(ps => ps.shape.shapeId));
+
+  function collectTransitiveShapes(startIds: string[]): string[] {
+    const allIds = new Set(startIds);
+    const queue = [...startIds];
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const shape = shapes.find(s => s.shapeId === id);
+      if (!shape) continue;
+
+      const rows = rowService.list(workspaceId, id);
+      for (const row of rows) {
+        if (!row.valueShape) continue;
+        const refs = row.valueShape.split(/[|\n]/).map(s => s.trim()).filter(Boolean);
+        for (const ref of refs) {
+          if (!allIds.has(ref) && !profileShapeIds.has(ref) && !isStartingPointShape(ref)) {
+            allIds.add(ref);
+            queue.push(ref);
+          }
+        }
+      }
+    }
+
+    return Array.from(allIds);
+  }
+
+  for (const profileInfo of profileShapes) {
+    profileInfo.linkedShapeIds = collectTransitiveShapes(profileInfo.linkedShapeIds);
+  }
+
   // Build profile documents
   const documents: MarvaProfileDocument[] = [];
 

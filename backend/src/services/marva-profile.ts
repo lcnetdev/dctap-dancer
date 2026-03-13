@@ -302,7 +302,7 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
     if (hasPartRows.length > 0) {
       const ids = hasPartRows
         .map(r => r.valueShape!)
-        .flatMap(vs => vs.split('\n').map(s => s.trim()).filter(Boolean))
+        .flatMap(vs => vs.split(/[|\n]/).map(s => s.trim()).filter(Boolean))
         // Filter out starting point shape references
         .filter(id => !isStartingPointShape(id));
 
@@ -366,19 +366,19 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
         } else if (row.valueNodeType === 'bnode' && row.valueShape) {
           prop.type = 'resource';
           prop.valueConstraint.valueTemplateRefs = row.valueShape
-            .split('\n')
+            .split(/[|\n]/)
             .map(s => s.trim())
             .filter(Boolean);
         } else if (row.valueConstraintType === 'IRIstem' && row.valueConstraint) {
           prop.type = 'lookup';
           prop.valueConstraint.useValuesFrom = row.valueConstraint
-            .split('\n')
+            .split(/[|\n]/)
             .map(s => s.trim())
             .filter(Boolean);
         } else if (row.valueShape) {
           prop.type = 'resource';
           prop.valueConstraint.valueTemplateRefs = row.valueShape
-            .split('\n')
+            .split(/[|\n]/)
             .map(s => s.trim())
             .filter(Boolean);
         }
@@ -391,8 +391,8 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
         }
 
         // Handle defaults
-        const defaultLiterals = row.lcDefaultLiteral?.split('\n').filter(Boolean) || [];
-        const defaultURIs = row.lcDefaultURI?.split('\n').filter(Boolean) || [];
+        const defaultLiterals = row.lcDefaultLiteral?.split(/[|\n]/).filter(Boolean) || [];
+        const defaultURIs = row.lcDefaultURI?.split(/[|\n]/).filter(Boolean) || [];
         const maxDefaults = Math.max(defaultLiterals.length, defaultURIs.length);
 
         for (let i = 0; i < maxDefaults; i++) {
@@ -474,13 +474,13 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
         } else if (row.valueNodeType === 'bnode' && row.valueShape) {
           prop.type = 'resource';
           prop.valueConstraint.valueTemplateRefs = row.valueShape
-            .split('\n')
+            .split(/[|\n]/)
             .map(s => s.trim())
             .filter(Boolean);
         } else if (row.valueConstraintType === 'IRIstem' && row.valueConstraint) {
           prop.type = 'lookup';
           prop.valueConstraint.useValuesFrom = row.valueConstraint
-            .split('\n')
+            .split(/[|\n]/)
             .map(s => s.trim())
             .filter(Boolean);
         }
@@ -491,8 +491,8 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
           };
         }
 
-        const defaultLiterals = row.lcDefaultLiteral?.split('\n').filter(Boolean) || [];
-        const defaultURIs = row.lcDefaultURI?.split('\n').filter(Boolean) || [];
+        const defaultLiterals = row.lcDefaultLiteral?.split(/[|\n]/).filter(Boolean) || [];
+        const defaultURIs = row.lcDefaultURI?.split(/[|\n]/).filter(Boolean) || [];
         const maxDefaults = Math.max(defaultLiterals.length, defaultURIs.length);
 
         for (let i = 0; i < maxDefaults; i++) {

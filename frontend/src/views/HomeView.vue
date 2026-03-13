@@ -16,6 +16,9 @@
         <button class="btn btn-secondary" @click="triggerMarvaImport">
           Import Marva Profile
         </button>
+        <button v-if="allowDbUpload" class="btn btn-secondary" @click="triggerDbImport">
+          Load Workspace (.db)
+        </button>
         <input
           ref="fileInput"
           type="file"
@@ -29,6 +32,13 @@
           accept=".json"
           style="display: none"
           @change="handleMarvaFileSelect"
+        />
+        <input
+          ref="dbFileInput"
+          type="file"
+          accept=".db"
+          style="display: none"
+          @change="handleDbFileSelect"
         />
       </div>
 
@@ -69,6 +79,9 @@
             <button class="btn btn-secondary" @click="duplicateWorkspace(workspace)">
               Duplicate
             </button>
+            <a class="btn btn-secondary" :href="getDownloadDbUrl(workspace.id)" title="Download workspace as .db file">
+              Download
+            </a>
             <button
               class="btn btn-danger"
               @click="confirmDelete(workspace)"
@@ -211,13 +224,41 @@
         </form>
       </div>
     </div>
+
+    <!-- DB Import Dialog -->
+    <div v-if="showDbImportDialog" class="dialog-overlay" @click.self="cancelDbImport">
+      <div class="dialog">
+        <h2>Load Workspace Database</h2>
+        <p class="dialog-info">File: {{ dbFileName }}</p>
+        <form @submit.prevent="doDbImport">
+          <div class="form-group">
+            <label for="dbWorkspaceName">Workspace Name</label>
+            <input
+              id="dbWorkspaceName"
+              v-model="dbWorkspaceName"
+              type="text"
+              placeholder="Enter workspace name (or leave blank to use name from file)"
+              autofocus
+            />
+          </div>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-secondary" @click="cancelDbImport">
+              Cancel
+            </button>
+            <button type="submit" class="btn btn-primary" :disabled="dbImporting">
+              {{ dbImporting ? 'Loading...' : 'Load' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
 <script lang="ts">
 import { defineComponent, ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { workspaceApi, importExportApi, marvaProfileApi } from '@/services/api';
+import { workspaceApi, importExportApi, marvaProfileApi, configApi } from '@/services/api';
 import type { Workspace } from '@/types';
 
 export default defineComponent({
@@ -253,6 +294,15 @@ export default defineComponent({
     const marvaProfiles = ref<unknown[]>([]);
     const marvaWorkspaceName = ref('');
     const marvaImporting = ref(false);
+
+    // DB import states
+    const dbFileInput = ref<HTMLInputElement | null>(null);
+    const allowDbUpload = ref(false);
+    const showDbImportDialog = ref(false);
+    const dbFileName = ref('');
+    const dbWorkspaceName = ref('');
+    const dbImporting = ref(false);
+    const dbFileToImport = ref<File | null>(null);
 
     // Computed property to sort workspaces with locked ones at the top
     const sortedWorkspaces = computed(() => {
@@ -442,7 +492,65 @@ export default defineComponent({
       marvaWorkspaceName.value = '';
     }
 
-    onMounted(loadWorkspaces);
+    function getDownloadDbUrl(workspaceId: string): string {
+      return importExportApi.getDownloadDbUrl(workspaceId);
+    }
+
+    function triggerDbImport() {
+      dbFileInput.value?.click();
+    }
+
+    function handleDbFileSelect(event: Event) {
+      const input = event.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+
+      dbFileToImport.value = file;
+      dbFileName.value = file.name;
+      dbWorkspaceName.value = '';
+      showDbImportDialog.value = true;
+      input.value = '';
+    }
+
+    async function doDbImport() {
+      if (!dbFileToImport.value) return;
+
+      dbImporting.value = true;
+      try {
+        const name = dbWorkspaceName.value.trim() || undefined;
+        const result = await importExportApi.importDb(dbFileToImport.value, name);
+        showDbImportDialog.value = false;
+        dbFileToImport.value = null;
+        dbFileName.value = '';
+        dbWorkspaceName.value = '';
+        router.push({ name: 'workspace', params: { id: result.workspaceId } });
+      } catch (e) {
+        alert((e as Error).message);
+      } finally {
+        dbImporting.value = false;
+      }
+    }
+
+    function cancelDbImport() {
+      showDbImportDialog.value = false;
+      dbFileToImport.value = null;
+      dbFileName.value = '';
+      dbWorkspaceName.value = '';
+    }
+
+    async function loadConfig() {
+      try {
+        const config = await configApi.get();
+        allowDbUpload.value = config.allowDbUpload;
+      } catch {
+        // Config endpoint not available, leave defaults
+      }
+    }
+
+    onMounted(() => {
+      loadWorkspaces();
+      loadConfig();
+    });
 
     return {
       workspaces,
@@ -451,6 +559,7 @@ export default defineComponent({
       error,
       fileInput,
       marvaFileInput,
+      dbFileInput,
       showNewDialog,
       newWorkspaceName,
       showDuplicateDialog,
@@ -466,6 +575,11 @@ export default defineComponent({
       marvaProfiles,
       marvaWorkspaceName,
       marvaImporting,
+      allowDbUpload,
+      showDbImportDialog,
+      dbFileName,
+      dbWorkspaceName,
+      dbImporting,
       loadWorkspaces,
       createWorkspace,
       openWorkspace,
@@ -481,7 +595,12 @@ export default defineComponent({
       triggerMarvaImport,
       handleMarvaFileSelect,
       doMarvaImport,
-      cancelMarvaImport
+      cancelMarvaImport,
+      getDownloadDbUrl,
+      triggerDbImport,
+      handleDbFileSelect,
+      doDbImport,
+      cancelDbImport
     };
   }
 });

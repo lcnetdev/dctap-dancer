@@ -24,6 +24,18 @@ const upload = multer({
   }
 });
 
+const uploadDb = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit for DB files
+  fileFilter: (_req, file, cb) => {
+    if (file.originalname.endsWith('.db') || file.mimetype === 'application/octet-stream') {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only .db files are allowed.'));
+    }
+  }
+});
+
 // Import CSV/TSV to create new workspace
 router.post('/import', upload.single('file'), (req: Request, res: Response, next: NextFunction) => {
   if (!req.file) {
@@ -101,6 +113,63 @@ router.post('/validate/row', (req: Request, res: Response, next: NextFunction) =
   }
 
   const response: ApiResponse = { success: true, data: result };
+  res.json(response);
+});
+
+// Download workspace as .db file
+router.get('/workspaces/:id/download-db', (req: Request, res: Response, next: NextFunction) => {
+  const workspace = workspaceService.get(req.params.id);
+  if (!workspace) {
+    return next(new AppError(404, 'Workspace not found', 'WORKSPACE_NOT_FOUND'));
+  }
+
+  try {
+    const buffer = workspaceService.exportDb(req.params.id);
+    const filename = `${workspace.name.replace(/[^a-zA-Z0-9-_]/g, '_')}.db`;
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    return next(new AppError(500, 'Failed to export workspace database', 'DB_EXPORT_FAILED'));
+  }
+});
+
+// Upload .db file to create new workspace (requires ALLOW_DB_UPLOAD=true)
+router.post('/import-db', uploadDb.single('file'), (req: Request, res: Response, next: NextFunction) => {
+  if (process.env.ALLOW_DB_UPLOAD !== 'true') {
+    return next(new AppError(403, 'Database upload is disabled. Set ALLOW_DB_UPLOAD=true to enable.', 'DB_UPLOAD_DISABLED'));
+  }
+
+  if (!req.file) {
+    return next(new AppError(400, 'No file uploaded', 'NO_FILE'));
+  }
+
+  try {
+    const name = req.body.name || undefined;
+    const workspace = workspaceService.importDb(req.file.buffer, name);
+
+    const response: ApiResponse = {
+      success: true,
+      data: {
+        workspaceId: workspace.id,
+        workspaceName: workspace.name
+      }
+    };
+    res.status(201).json(response);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to import database';
+    return next(new AppError(400, message, 'DB_IMPORT_FAILED'));
+  }
+});
+
+// Config endpoint - tells frontend which features are enabled
+router.get('/config', (_req: Request, res: Response) => {
+  const response: ApiResponse = {
+    success: true,
+    data: {
+      allowDbUpload: process.env.ALLOW_DB_UPLOAD === 'true'
+    }
+  };
   res.json(response);
 });
 

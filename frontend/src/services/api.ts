@@ -327,6 +327,26 @@ export const importExportApi = {
 
   getExportUrl(workspaceId: string, format: 'csv' | 'tsv' = 'csv'): string {
     return `${getBasePath()}api/workspaces/${workspaceId}/export?format=${format}`;
+  },
+
+  getDownloadDbUrl(workspaceId: string): string {
+    return `${getBasePath()}api/workspaces/${workspaceId}/download-db`;
+  },
+
+  async importDb(file: File, name?: string): Promise<{ workspaceId: string; workspaceName: string }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (name) {
+        formData.append('name', name);
+      }
+      const response = await api.post<ApiResponse<{ workspaceId: string; workspaceName: string }>>('/import-db', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      return response.data.data!;
+    } catch (error) {
+      handleError(error as AxiosError<ApiResponse>);
+    }
   }
 };
 
@@ -396,6 +416,18 @@ export const startingPointApi = {
 
   getExportUrl(workspaceId: string): string {
     return `${getBasePath()}api/starting-point/export/${workspaceId}`;
+  }
+};
+
+// Config API
+export const configApi = {
+  async get(): Promise<{ allowDbUpload: boolean }> {
+    try {
+      const response = await api.get<ApiResponse<{ allowDbUpload: boolean }>>('/config');
+      return response.data.data!;
+    } catch (error) {
+      handleError(error as AxiosError<ApiResponse>);
+    }
   }
 };
 

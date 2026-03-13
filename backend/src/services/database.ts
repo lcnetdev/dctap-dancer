@@ -343,6 +343,54 @@ export const workspaceService = {
   getUpdatedAt(id: string): number | null {
     const row = extractOne<{ updated_at: number }>(masterDb, 'SELECT updated_at FROM workspaces WHERE id = ?', [id]);
     return row?.updated_at ?? null;
+  },
+
+  getDbPath(id: string): string {
+    return join(DATA_DIR, `${id}.db`);
+  },
+
+  exportDb(id: string): Buffer {
+    // Make sure the on-disk file is up to date
+    saveWorkspaceDb(id);
+    const dbPath = join(DATA_DIR, `${id}.db`);
+    return readFileSync(dbPath);
+  },
+
+  importDb(buffer: Buffer, name?: string): Workspace {
+    const newId = uuidv4();
+    const now = Math.floor(Date.now() / 1000);
+
+    // Load the uploaded DB to validate it and extract/set the name
+    const db = new SQL.Database(new Uint8Array(buffer));
+
+    // Validate it has the expected structure
+    const tables = extractRows<{ name: string }>(db, "SELECT name FROM sqlite_master WHERE type='table'");
+    const tableNames = tables.map(t => t.name);
+    if (!tableNames.includes('_metadata') || !tableNames.includes('_shapes')) {
+      db.close();
+      throw new Error('Invalid workspace database: missing required tables (_metadata, _shapes)');
+    }
+
+    // Extract or override the workspace name
+    let workspaceName = name;
+    if (!workspaceName) {
+      const row = extractOne<{ value: string }>(db, "SELECT value FROM _metadata WHERE key = 'name'");
+      workspaceName = row?.value || 'Imported Workspace';
+    }
+
+    // Update the name in the imported DB
+    db.run('UPDATE _metadata SET value = ?, updated_at = ? WHERE key = ?', [workspaceName, now, 'name']);
+
+    // Write the workspace DB to disk
+    const data = db.export();
+    writeFileSync(join(DATA_DIR, `${newId}.db`), Buffer.from(data));
+    db.close();
+
+    // Register in master DB
+    masterDb.run('INSERT INTO workspaces (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)', [newId, workspaceName, now, now]);
+    saveMasterDb();
+
+    return { id: newId, name: workspaceName, createdAt: now, updatedAt: now };
   }
 };
 

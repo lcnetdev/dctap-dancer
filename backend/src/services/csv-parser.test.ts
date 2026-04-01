@@ -21,7 +21,16 @@ vi.mock('./database.js', () => ({
   },
   namespaceService: {
     create: vi.fn()
-  }
+  },
+  folderService: {
+    create: vi.fn((_workspaceId: string, name: string) => ({
+      id: Math.floor(Math.random() * 1000),
+      name,
+      createdAt: Date.now()
+    }))
+  },
+  pauseDbWrites: vi.fn(),
+  resumeDbWrites: vi.fn()
 }));
 
 describe('CSV Parser', () => {

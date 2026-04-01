@@ -56,12 +56,41 @@ async function initDb() {
 }
 
 function saveMasterDb() {
+  if (dbBatchMode) {
+    pendingMasterSave.needed = true;
+    return;
+  }
   const data = masterDb.export();
   const buffer = Buffer.from(data);
   writeFileSync(join(DATA_DIR, '_master.db'), buffer);
 }
 
+// Batch mode: defer disk writes during bulk operations
+let dbBatchMode = false;
+const pendingSaves = new Set<string>();
+const pendingMasterSave = { needed: false };
+
+export function pauseDbWrites(): void {
+  dbBatchMode = true;
+}
+
+export function resumeDbWrites(): void {
+  dbBatchMode = false;
+  if (pendingMasterSave.needed) {
+    saveMasterDb();
+    pendingMasterSave.needed = false;
+  }
+  for (const workspaceId of pendingSaves) {
+    saveWorkspaceDb(workspaceId);
+  }
+  pendingSaves.clear();
+}
+
 function saveWorkspaceDb(workspaceId: string) {
+  if (dbBatchMode) {
+    pendingSaves.add(workspaceId);
+    return;
+  }
   const db = dbCache.get(workspaceId);
   if (!db) return;
   const data = db.export();

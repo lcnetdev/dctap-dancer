@@ -3,8 +3,9 @@ import {
   DEFAULT_NAMESPACES,
   ValidationError
 } from '../types/dctap.js';
-import { workspaceService, shapeService, rowService, namespaceService } from './database.js';
+import { workspaceService, shapeService, rowService, namespaceService, folderService, pauseDbWrites, resumeDbWrites } from './database.js';
 import { validateRow } from './validation.js';
+import { pauseCacheInvalidation, resumeCacheInvalidation } from './cache.js';
 
 // Column name mappings (case-insensitive)
 const COLUMN_MAPPINGS: Record<string, keyof CreateRowRequest | 'shapeID' | 'shapeLabel' | 'resourceURI'> = {
@@ -91,9 +92,43 @@ function escapeCSVValue(value: string | null | undefined, delimiter: string, con
   return str;
 }
 
+/**
+ * Split CSV content into logical lines, respecting quoted fields that contain newlines.
+ */
+function splitCSVLines(content: string): string[] {
+  const lines: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i];
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      current += char;
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      // Skip \n after \r for \r\n line endings
+      if (char === '\r' && content[i + 1] === '\n') {
+        i++;
+      }
+      if (current.trim().length > 0) {
+        lines.push(current);
+      }
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim().length > 0) {
+    lines.push(current);
+  }
+
+  return lines;
+}
+
 export function parseCSV(content: string): ParseResult {
   const delimiter = detectDelimiter(content);
-  const lines = content.split(/\r?\n/).filter(line => line.trim().length > 0);
+  const lines = splitCSVLines(content);
 
   if (lines.length === 0) {
     return { success: false, errors: [{ message: 'Empty file', severity: 'error' }] };
@@ -237,6 +272,38 @@ export interface ImportResult {
   unknownNamespaces?: string[];
 }
 
+/**
+ * Build folders from shape ID prefixes and return a map of shapeId -> folderId.
+ * Groups shapes by stripping the last colon-separated segment.
+ * Only creates folders for groups with 2+ shapes.
+ */
+function buildFolderMap(workspaceId: string, shapeIds: string[]): Map<string, number> {
+  const result = new Map<string, number>();
+
+  // Group shapes by prefix (everything before the last colon)
+  const prefixGroups = new Map<string, string[]>();
+  for (const shapeId of shapeIds) {
+    const lastColon = shapeId.lastIndexOf(':');
+    if (lastColon <= 0) continue; // No prefix or starts with colon
+    const prefix = shapeId.substring(0, lastColon);
+    if (!prefixGroups.has(prefix)) {
+      prefixGroups.set(prefix, []);
+    }
+    prefixGroups.get(prefix)!.push(shapeId);
+  }
+
+  // Create folders for groups with 2+ shapes
+  for (const [prefix, groupShapeIds] of prefixGroups) {
+    if (groupShapeIds.length < 2) continue;
+    const folder = folderService.create(workspaceId, prefix);
+    for (const shapeId of groupShapeIds) {
+      result.set(shapeId, folder.id);
+    }
+  }
+
+  return result;
+}
+
 export function importToWorkspace(
   content: string,
   workspaceName: string
@@ -271,16 +338,25 @@ export function importToWorkspace(
   // Create workspace
   const workspace = workspaceService.create(workspaceName);
 
+  // Pause disk writes and cache invalidation during bulk import
+  pauseDbWrites();
+  pauseCacheInvalidation();
+
   // Collect unknown namespaces
   const unknownNamespaces: string[] = [];
   const knownPrefixes = new Set(DEFAULT_NAMESPACES.map(ns => ns.prefix));
+
+  // Auto-create folders for shapes with shared prefixes
+  const shapeIds = Array.from(shapeGroups.keys());
+  const folderMap = buildFolderMap(workspace.id, shapeIds);
 
   // Create shapes and import rows
   let totalRows = 0;
   const allWarnings: ValidationError[] = [...(parseResult.warnings || [])];
 
   for (const [shapeId, group] of shapeGroups) {
-    shapeService.create(workspace.id, shapeId, group.label || undefined, group.resourceURI || undefined);
+    const folderId = folderMap.get(shapeId) ?? undefined;
+    shapeService.create(workspace.id, shapeId, group.label || undefined, group.resourceURI || undefined, folderId);
 
     for (let i = 0; i < group.rows.length; i++) {
       const rowData = group.rows[i];
@@ -315,6 +391,10 @@ export function importToWorkspace(
       severity: 'warning'
     });
   }
+
+  // Resume disk writes (single save) and cache invalidation
+  resumeDbWrites();
+  resumeCacheInvalidation();
 
   return {
     success: true,

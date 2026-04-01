@@ -184,6 +184,12 @@
               autofocus
             />
           </div>
+          <div class="form-group checkbox-group">
+            <label>
+              <input type="checkbox" v-model="csvUseLCColumns" />
+              Use LC specific headers/fields for this import
+            </label>
+          </div>
           <div class="dialog-actions">
             <button type="button" class="btn btn-secondary" @click="cancelCsvImport">
               Cancel
@@ -288,6 +294,7 @@ export default defineComponent({
     const csvWorkspaceName = ref('');
     const csvImporting = ref(false);
     const csvFileToImport = ref<File | null>(null);
+    const csvUseLCColumns = ref(false);
 
     // Marva import states
     const showMarvaImportDialog = ref(false);
@@ -403,10 +410,14 @@ export default defineComponent({
       csvImporting.value = true;
       try {
         const result = await importExportApi.importFile(csvFileToImport.value, csvWorkspaceName.value.trim());
+        if (csvUseLCColumns.value) {
+          await workspaceApi.updateOptions(result.workspaceId, { useLCColumns: true });
+        }
         showCsvImportDialog.value = false;
         csvFileToImport.value = null;
         csvFileName.value = '';
         csvWorkspaceName.value = '';
+        csvUseLCColumns.value = false;
         if (result.warnings && result.warnings.length > 0) {
           alert(`Imported with warnings:\n${result.warnings.map(w => w.message).join('\n')}`);
         }
@@ -423,6 +434,7 @@ export default defineComponent({
       csvFileToImport.value = null;
       csvFileName.value = '';
       csvWorkspaceName.value = '';
+      csvUseLCColumns.value = false;
     }
 
     function formatDate(timestamp: number) {
@@ -571,6 +583,7 @@ export default defineComponent({
       csvFileName,
       csvWorkspaceName,
       csvImporting,
+      csvUseLCColumns,
       showMarvaImportDialog,
       marvaProfiles,
       marvaWorkspaceName,
@@ -806,6 +819,17 @@ export default defineComponent({
 .form-group input:focus {
   outline: none;
   border-color: #3498db;
+}
+
+.checkbox-group label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.checkbox-group input[type="checkbox"] {
+  width: auto;
 }
 
 .dialog-actions {

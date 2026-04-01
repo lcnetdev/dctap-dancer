@@ -93,11 +93,38 @@ export function setCachedTsv(workspaceId: string, data: string): void {
   });
 }
 
+// Track workspaces with deferred invalidation during batch operations
+const pendingInvalidations = new Set<string>();
+let batchMode = false;
+
+/**
+ * Pause cache invalidation during batch operations (e.g., import).
+ * Invalidations are collected and applied when resumeCacheInvalidation() is called.
+ */
+export function pauseCacheInvalidation(): void {
+  batchMode = true;
+}
+
+/**
+ * Resume cache invalidation and flush any pending invalidations.
+ */
+export function resumeCacheInvalidation(): void {
+  batchMode = false;
+  for (const workspaceId of pendingInvalidations) {
+    invalidateWorkspaceCache(workspaceId);
+  }
+  pendingInvalidations.clear();
+}
+
 /**
  * Invalidate cache for a specific workspace
  * Called when workspace data changes
  */
 export function invalidateWorkspaceCache(workspaceId: string): void {
+  if (batchMode) {
+    pendingInvalidations.add(workspaceId);
+    return;
+  }
   marvaProfileCache.delete(workspaceId);
   startingPointCache.delete(workspaceId);
   csvCache.delete(workspaceId);

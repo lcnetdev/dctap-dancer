@@ -57,6 +57,10 @@ export interface MarvaValueConstraint {
   editable?: string;
   repeatable?: string;
   valueLanguage?: string;
+  // dctap-dancer extension: enumerated picklist values from rows with
+  // valueConstraintType 'picklist'. Always emitted by our export (empty array
+  // by default); optional here because stock LC/Marva profiles don't have it.
+  picklist?: string[];
 }
 
 export interface MarvaDefault {

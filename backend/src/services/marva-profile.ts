@@ -98,6 +98,18 @@ function propertyTemplateToRow(
     }
   }
 
+  // Restore picklist values (dctap-dancer extension emitted by our export).
+  // Guarded so stock Marva semantics (IRIstem from useValuesFrom) win if both
+  // are somehow present.
+  const picklistValues = prop.valueConstraint?.picklist;
+  if (picklistValues && picklistValues.length > 0 && !row.valueConstraintType) {
+    row.valueConstraintType = 'picklist';
+    row.valueConstraint = picklistValues
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
   // Handle LC dataTypeURI
   if (prop.valueConstraint?.valueDataType?.dataTypeURI) {
     row.lcDataTypeURI = prefixUri(prop.valueConstraint.valueDataType.dataTypeURI, namespaces);
@@ -179,6 +191,13 @@ export function importMarvaProfiles(
   // Track folders: folderName -> folderId
   const folderMap = new Map<string, number>();
 
+  // Track shapes already created in this workspace. Marva/BIBFRAME profile bundles
+  // share resource templates across profiles (e.g. lc:RT:bf2:Agent:bfPerson appears
+  // in most profiles), and shape_id is UNIQUE within a workspace, so each shape must
+  // be created only once even though many profiles reference it. Creating it again
+  // is what triggers "UNIQUE constraint failed: _shapes.shape_id".
+  const createdShapeIds = new Set<string>();
+
   // Helper to get or create folder
   function getOrCreateFolder(folderName: string): number {
     if (folderMap.has(folderName)) {
@@ -189,73 +208,96 @@ export function importMarvaProfiles(
     return folder.id;
   }
 
-  // Process each profile document
-  for (const doc of profiles) {
-    const profile = doc.json.Profile;
-    if (!profile) continue;
+  try {
+    // Process each profile document
+    for (const doc of profiles) {
+      const profile = doc.json.Profile;
+      if (!profile) continue;
 
-    // Create the profile shape (links to all resourceTemplates)
-    const profileShapeId = profile.id;
-    const profileFolderName = extractFolderName(profileShapeId);
-    const profileFolderId = profileFolderName ? getOrCreateFolder(profileFolderName) : undefined;
+      // Create the profile shape (links to all resourceTemplates).
+      // Skip the whole document if a shape with this id was already imported,
+      // so a repeated profile doesn't create duplicate link rows.
+      const profileShapeId = profile.id;
+      if (createdShapeIds.has(profileShapeId)) continue;
 
-    shapeService.create(
-      workspace.id,
-      profileShapeId,
-      profile.title,
-      undefined, // No resourceURI for profile shape
-      profileFolderId,
-      profile.description || undefined // Description from profile
-    );
-    shapesCreated++;
-
-    // Collect all resourceTemplate IDs for linking
-    const resourceTemplateIds: string[] = [];
-
-    // Create shapes for each resourceTemplate
-    for (const rt of profile.resourceTemplates || []) {
-      resourceTemplateIds.push(rt.id);
-
-      // Determine folder for this shape
-      const rtFolderName = extractFolderName(rt.id);
-      const rtFolderId = rtFolderName ? getOrCreateFolder(rtFolderName) : undefined;
-
-      // Prefix the resourceURI if present
-      const prefixedResourceURI = rt.resourceURI ? prefixUri(rt.resourceURI, namespaces) : undefined;
+      const profileFolderName = extractFolderName(profileShapeId);
+      const profileFolderId = profileFolderName ? getOrCreateFolder(profileFolderName) : undefined;
 
       shapeService.create(
         workspace.id,
-        rt.id,
-        rt.resourceLabel || undefined,
-        prefixedResourceURI,
-        rtFolderId,
-        rt.remark || undefined // Description from resource template remark
+        profileShapeId,
+        profile.title,
+        undefined, // No resourceURI for profile shape
+        profileFolderId,
+        profile.description || undefined // Description from profile
       );
+      createdShapeIds.add(profileShapeId);
       shapesCreated++;
 
-      // Create rows for each propertyTemplate
-      let rowOrder = 0;
-      for (const prop of rt.propertyTemplates || []) {
-        const rowData = propertyTemplateToRow(prop, rowOrder, namespaces);
-        rowService.create(workspace.id, rt.id, rowData);
+      // Collect resourceTemplate IDs this profile links to (deduped per profile)
+      const resourceTemplateIds: string[] = [];
+      const linkedIds = new Set<string>();
+
+      // Create shapes for each resourceTemplate
+      for (const rt of profile.resourceTemplates || []) {
+        if (!linkedIds.has(rt.id)) {
+          resourceTemplateIds.push(rt.id);
+          linkedIds.add(rt.id);
+        }
+
+        // A shared resource template only needs its shape + rows created once.
+        if (createdShapeIds.has(rt.id)) continue;
+
+        // Determine folder for this shape
+        const rtFolderName = extractFolderName(rt.id);
+        const rtFolderId = rtFolderName ? getOrCreateFolder(rtFolderName) : undefined;
+
+        // Prefix the resourceURI if present
+        const prefixedResourceURI = rt.resourceURI ? prefixUri(rt.resourceURI, namespaces) : undefined;
+
+        shapeService.create(
+          workspace.id,
+          rt.id,
+          rt.resourceLabel || undefined,
+          prefixedResourceURI,
+          rtFolderId,
+          rt.remark || undefined // Description from resource template remark
+        );
+        createdShapeIds.add(rt.id);
+        shapesCreated++;
+
+        // Create rows for each propertyTemplate
+        let rowOrder = 0;
+        for (const prop of rt.propertyTemplates || []) {
+          const rowData = propertyTemplateToRow(prop, rowOrder, namespaces);
+          rowService.create(workspace.id, rt.id, rowData);
+          rowsCreated++;
+          rowOrder++;
+        }
+      }
+
+      // Create rows in the profile shape linking to each resourceTemplate
+      let linkRowOrder = 0;
+      for (const rtId of resourceTemplateIds) {
+        rowService.create(workspace.id, profileShapeId, {
+          rowOrder: linkRowOrder,
+          propertyId: 'dcterms:hasPart',
+          propertyLabel: 'Has Shape',
+          valueShape: rtId,
+          valueNodeType: 'bnode'
+        });
         rowsCreated++;
-        rowOrder++;
+        linkRowOrder++;
       }
     }
-
-    // Create rows in the profile shape linking to each resourceTemplate
-    let linkRowOrder = 0;
-    for (const rtId of resourceTemplateIds) {
-      rowService.create(workspace.id, profileShapeId, {
-        rowOrder: linkRowOrder,
-        propertyId: 'dcterms:hasPart',
-        propertyLabel: 'Has Shape',
-        valueShape: rtId,
-        valueNodeType: 'bnode'
-      });
-      rowsCreated++;
-      linkRowOrder++;
+  } catch (err) {
+    // Don't leave a half-populated workspace behind if the import fails partway.
+    try {
+      workspaceService.delete(workspace.id);
+    } catch {
+      // ignore cleanup failure; surface the original error
     }
+    throw err;
   }
 
   return {
@@ -390,7 +432,8 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
             valueTemplateRefs: [],
             useValuesFrom: [],
             defaults: [],
-            valueDataType: {}
+            valueDataType: {},
+            picklist: []
           }
         };
 
@@ -412,6 +455,15 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
         } else if (row.valueShape) {
           prop.type = 'resource';
           prop.valueConstraint.valueTemplateRefs = row.valueShape
+            .split(/[|\n]/)
+            .map(s => s.trim())
+            .filter(Boolean);
+        }
+
+        // Handle picklist values (dctap-dancer extension; kept separate from
+        // useValuesFrom, which carries IRIstem/lookup semantics downstream)
+        if (row.valueConstraintType === 'picklist' && row.valueConstraint) {
+          prop.valueConstraint.picklist = row.valueConstraint
             .split(/[|\n]/)
             .map(s => s.trim())
             .filter(Boolean);
@@ -499,7 +551,8 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
             valueTemplateRefs: [],
             useValuesFrom: [],
             defaults: [],
-            valueDataType: {}
+            valueDataType: {},
+            picklist: []
           }
         };
 
@@ -514,6 +567,15 @@ export function exportMarvaProfiles(workspaceId: string): MarvaProfileDocument[]
         } else if (row.valueConstraintType === 'IRIstem' && row.valueConstraint) {
           prop.type = 'lookup';
           prop.valueConstraint.useValuesFrom = row.valueConstraint
+            .split(/[|\n]/)
+            .map(s => s.trim())
+            .filter(Boolean);
+        }
+
+        // Handle picklist values (dctap-dancer extension; kept separate from
+        // useValuesFrom, which carries IRIstem/lookup semantics downstream)
+        if (row.valueConstraintType === 'picklist' && row.valueConstraint) {
+          prop.valueConstraint.picklist = row.valueConstraint
             .split(/[|\n]/)
             .map(s => s.trim())
             .filter(Boolean);

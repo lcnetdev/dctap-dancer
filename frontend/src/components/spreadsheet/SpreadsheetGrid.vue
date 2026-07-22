@@ -775,6 +775,7 @@ export default defineComponent({
         const newRow = Math.max(0, Math.min(displayRows.value.length - 1, selection.value.end.row + delta.row));
         const newCol = Math.max(0, Math.min(columns.value.length - 1, selection.value.end.col + delta.col));
         selection.value.end = { row: newRow, col: newCol };
+        scrollCellIntoView(newRow, newCol);
       } else {
         moveSelection(delta.col, delta.row);
       }
@@ -790,6 +791,40 @@ export default defineComponent({
         start: { row: newRow, col: newCol },
         end: { row: newRow, col: newCol }
       };
+      scrollCellIntoView(newRow, newCol);
+    }
+
+    function scrollCellIntoView(rowIndex: number, colIndex: number) {
+      const wrapper = gridWrapper.value;
+      if (!wrapper) return;
+
+      const rowEl = wrapper.querySelectorAll<HTMLTableRowElement>('tbody tr')[rowIndex];
+      const cell = rowEl?.cells[colIndex + 1]; // first cell is the row number
+      if (!cell) return;
+
+      // At the first row/column, scroll to the edge so headers/row numbers are visible
+      if (rowIndex === 0) wrapper.scrollTop = 0;
+      if (colIndex === 0) wrapper.scrollLeft = 0;
+
+      const wrapperRect = wrapper.getBoundingClientRect();
+      const cellRect = cell.getBoundingClientRect();
+
+      const top = cellRect.top - wrapperRect.top;
+      const bottom = cellRect.bottom - wrapperRect.top;
+      const left = cellRect.left - wrapperRect.left;
+      const right = cellRect.right - wrapperRect.left;
+
+      if (top < 0) {
+        wrapper.scrollTop += top;
+      } else if (bottom > wrapper.clientHeight) {
+        wrapper.scrollTop += bottom - wrapper.clientHeight;
+      }
+
+      if (left < 0) {
+        wrapper.scrollLeft += left;
+      } else if (right > wrapper.clientWidth) {
+        wrapper.scrollLeft += right - wrapper.clientWidth;
+      }
     }
 
     // Editing

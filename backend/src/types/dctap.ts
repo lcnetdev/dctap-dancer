@@ -113,6 +113,7 @@ export const DEFAULT_NAMESPACES: Array<{ prefix: string; namespace: string }> = 
   { prefix: 'sp', namespace: 'http://id.loc.gov/ontologies/sp/' },
   { prefix: 'pom', namespace: 'http://performedmusicontology.org/ontology/' },
   { prefix: 'mads', namespace: 'http://www.loc.gov/mads/rdf/v1#' },
+  { prefix: 'madsrdf', namespace: 'http://www.loc.gov/mads/rdf/v1#' },
   { prefix: 'ri', namespace: 'http://id.loc.gov/ontologies/RecordInfo#' },
   { prefix: 'identifiers', namespace: 'http://id.loc.gov/vocabulary/identifiers/' }
 ];

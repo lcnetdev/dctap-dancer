@@ -112,9 +112,9 @@ export const DEFAULT_NAMESPACES: Array<{ prefix: string; namespace: string }> = 
   { prefix: 'cc', namespace: 'http://creativecommons.org/ns#' },
   { prefix: 'sp', namespace: 'http://id.loc.gov/ontologies/sp/' },
   { prefix: 'pom', namespace: 'http://performedmusicontology.org/ontology/' },
-  { prefix: 'mads', namespace: 'http://www.loc.gov/mads/rdf/v1#' }
-
-  
+  { prefix: 'mads', namespace: 'http://www.loc.gov/mads/rdf/v1#' },
+  { prefix: 'ri', namespace: 'http://id.loc.gov/ontologies/RecordInfo#' },
+  { prefix: 'identifiers', namespace: 'http://id.loc.gov/vocabulary/identifiers/' }
 ];
 
 // API Request/Response types
@@ -182,6 +182,7 @@ export interface CreateNamespaceRequest {
 
 export interface UpdateNamespaceRequest {
   namespace: string;
+  prefix?: string;
 }
 
 // Validation types

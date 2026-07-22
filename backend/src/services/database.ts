@@ -1006,16 +1006,17 @@ export const namespaceService = {
     return { id, prefix, namespace, createdAt: now };
   },
 
-  update(workspaceId: string, prefix: string, namespace: string): Namespace | null {
+  update(workspaceId: string, prefix: string, namespace: string, newPrefix?: string): Namespace | null {
     const db = getWorkspaceDb(workspaceId);
     const existing = this.get(workspaceId, prefix);
     if (!existing) return null;
 
-    db.run('UPDATE _namespaces SET namespace = ? WHERE prefix = ?', [namespace, prefix]);
+    const targetPrefix = newPrefix ?? prefix;
+    db.run('UPDATE _namespaces SET prefix = ?, namespace = ? WHERE prefix = ?', [targetPrefix, namespace, prefix]);
     saveWorkspaceDb(workspaceId);
     updateWorkspaceTimestamp(workspaceId);
 
-    return { ...existing, namespace };
+    return { ...existing, prefix: targetPrefix, namespace };
   },
 
   delete(workspaceId: string, prefix: string): boolean {

@@ -20,9 +20,11 @@
               <td>
                 <template v-if="editingPrefix === ns.prefix">
                   <input
-                    v-model="editForm.namespace"
+                    v-model="editForm.prefix"
                     type="text"
                     class="edit-input"
+                    @keydown.enter="saveEdit"
+                    @keydown.escape="cancelEdit"
                   />
                 </template>
                 <template v-else>
@@ -117,10 +119,13 @@ export default defineComponent({
     }
 
     async function saveEdit() {
-      if (!editingPrefix.value || !editForm.value.namespace) return;
+      if (!editingPrefix.value) return;
+      const prefix = editForm.value.prefix.trim();
+      const namespace = editForm.value.namespace.trim();
+      if (!prefix || !namespace) return;
 
       try {
-        await namespaceApi.update(props.workspaceId, editingPrefix.value, editForm.value.namespace);
+        await namespaceApi.update(props.workspaceId, editingPrefix.value, namespace, prefix);
         emit('update');
         cancelEdit();
       } catch (e) {

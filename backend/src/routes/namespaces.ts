@@ -59,13 +59,27 @@ router.post('/', checkWorkspaceLocked, (req: Request, res: Response, next: NextF
 
 // Update namespace (blocked for locked workspaces)
 router.put('/:prefix', checkWorkspaceLocked, (req: Request, res: Response, next: NextFunction) => {
-  const { namespace } = req.body as UpdateNamespaceRequest;
+  const { namespace, prefix: newPrefix } = req.body as UpdateNamespaceRequest;
 
   if (!namespace || typeof namespace !== 'string' || namespace.trim().length === 0) {
     return next(new AppError(400, 'Namespace is required', 'INVALID_NAMESPACE'));
   }
 
-  const ns = namespaceService.update(req.params.workspaceId, req.params.prefix, namespace.trim());
+  let trimmedNewPrefix: string | undefined;
+  if (newPrefix !== undefined) {
+    if (typeof newPrefix !== 'string' || newPrefix.trim().length === 0) {
+      return next(new AppError(400, 'Prefix is required', 'INVALID_PREFIX'));
+    }
+    trimmedNewPrefix = newPrefix.trim();
+    if (trimmedNewPrefix !== req.params.prefix) {
+      const existing = namespaceService.get(req.params.workspaceId, trimmedNewPrefix);
+      if (existing) {
+        return next(new AppError(409, 'Prefix already exists', 'PREFIX_EXISTS'));
+      }
+    }
+  }
+
+  const ns = namespaceService.update(req.params.workspaceId, req.params.prefix, namespace.trim(), trimmedNewPrefix);
   if (!ns) {
     return next(new AppError(404, 'Namespace not found', 'NAMESPACE_NOT_FOUND'));
   }

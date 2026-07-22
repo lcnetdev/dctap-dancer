@@ -289,9 +289,11 @@ export const namespaceApi = {
     }
   },
 
-  async update(workspaceId: string, prefix: string, namespace: string): Promise<Namespace> {
+  async update(workspaceId: string, prefix: string, namespace: string, newPrefix?: string): Promise<Namespace> {
     try {
-      const response = await api.put<ApiResponse<Namespace>>(`/workspaces/${workspaceId}/namespaces/${encodeURIComponent(prefix)}`, { namespace });
+      const body: { namespace: string; prefix?: string } = { namespace };
+      if (newPrefix !== undefined) body.prefix = newPrefix;
+      const response = await api.put<ApiResponse<Namespace>>(`/workspaces/${workspaceId}/namespaces/${encodeURIComponent(prefix)}`, body);
       return response.data.data!;
     } catch (error) {
       handleError(error as AxiosError<ApiResponse>);

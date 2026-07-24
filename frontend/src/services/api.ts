@@ -177,6 +177,15 @@ export const shapeApi = {
     }
   },
 
+  async duplicate(workspaceId: string, shapeId: string): Promise<{ shape: Shape; rowsCopied: number }> {
+    try {
+      const response = await api.post<ApiResponse<{ shape: Shape; rowsCopied: number }>>(`/workspaces/${workspaceId}/shapes/${encodeURIComponent(shapeId)}/duplicate`);
+      return response.data.data!;
+    } catch (error) {
+      handleError(error as AxiosError<ApiResponse>);
+    }
+  },
+
   async existsInWorkspace(workspaceId: string, shapeId: string, targetWorkspaceId: string): Promise<boolean> {
     try {
       const response = await api.get<ApiResponse<{ exists: boolean }>>(`/workspaces/${workspaceId}/shapes/${encodeURIComponent(shapeId)}/exists-in/${targetWorkspaceId}`);

@@ -120,6 +120,20 @@ router.get('/:shapeId/usages', (req: Request, res: Response, next: NextFunction)
   res.json(response);
 });
 
+// Duplicate shape within the same workspace (blocked for locked workspaces)
+router.post('/:shapeId/duplicate', checkWorkspaceLocked, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = shapeService.duplicate(req.params.workspaceId, req.params.shapeId);
+    if (!result) {
+      return next(new AppError(404, 'Shape not found', 'SHAPE_NOT_FOUND'));
+    }
+    const response: ApiResponse = { success: true, data: result };
+    res.status(201).json(response);
+  } catch (err) {
+    return next(new AppError(500, (err as Error).message, 'DUPLICATE_FAILED'));
+  }
+});
+
 // Check if shape exists in target workspace (for warning before copy)
 router.get('/:shapeId/exists-in/:targetWorkspaceId', (req: Request, res: Response, next: NextFunction) => {
   const shape = shapeService.get(req.params.workspaceId, req.params.shapeId);

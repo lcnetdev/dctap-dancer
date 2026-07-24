@@ -87,7 +87,21 @@ vi.mock('../services/database.js', () => ({
       shapes.delete(shapeId);
       return true;
     }),
-    getUsages: vi.fn(() => [])
+    getUsages: vi.fn(() => []),
+    duplicate: vi.fn((workspaceId: string, shapeId: string) => {
+      const shapes = mockShapes.get(workspaceId);
+      const source = shapes?.get(shapeId);
+      if (!source) return null;
+      let newShapeId = `${shapeId}_copy`;
+      let counter = 2;
+      while (shapes!.has(newShapeId)) {
+        newShapeId = `${shapeId}_copy${counter}`;
+        counter++;
+      }
+      const shape = { ...source, id: shapes!.size + 1, shapeId: newShapeId };
+      shapes!.set(newShapeId, shape);
+      return { shape, rowsCopied: 0 };
+    })
   },
   rowService: {
     list: vi.fn(() => []),
@@ -403,6 +417,41 @@ describe('API Routes', () => {
 
         expect(response.status).toBe(404);
         expect(response.body.success).toBe(false);
+      });
+    });
+
+    describe('POST /api/workspaces/:workspaceId/shapes/:shapeId/duplicate', () => {
+      it('should duplicate shape', async () => {
+        const { shapeService } = await import('../services/database.js');
+        shapeService.create(workspaceId, 'Person', 'Person Shape');
+
+        const response = await request(app).post(`/api/workspaces/${workspaceId}/shapes/Person/duplicate`);
+
+        expect(response.status).toBe(201);
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.shape.shapeId).toBe('Person_copy');
+        expect(response.body.data.shape.shapeLabel).toBe('Person Shape');
+      });
+
+      it('should generate incrementing copy names', async () => {
+        const { shapeService } = await import('../services/database.js');
+        shapeService.create(workspaceId, 'Person');
+
+        const first = await request(app).post(`/api/workspaces/${workspaceId}/shapes/Person/duplicate`);
+        const second = await request(app).post(`/api/workspaces/${workspaceId}/shapes/Person/duplicate`);
+
+        expect(first.status).toBe(201);
+        expect(first.body.data.shape.shapeId).toBe('Person_copy');
+        expect(second.status).toBe(201);
+        expect(second.body.data.shape.shapeId).toBe('Person_copy2');
+      });
+
+      it('should return 404 for non-existent shape', async () => {
+        const response = await request(app).post(`/api/workspaces/${workspaceId}/shapes/NonExistent/duplicate`);
+
+        expect(response.status).toBe(404);
+        expect(response.body.success).toBe(false);
+        expect(response.body.code).toBe('SHAPE_NOT_FOUND');
       });
     });
   });

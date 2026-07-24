@@ -594,6 +594,52 @@ export const shapeService = {
     return usages;
   },
 
+  duplicate(workspaceId: string, shapeId: string): { shape: Shape; rowsCopied: number } | null {
+    const sourceShape = this.get(workspaceId, shapeId);
+    if (!sourceShape) return null;
+
+    // Find an unused shape ID: Name_copy, Name_copy2, ...
+    let newShapeId = `${shapeId}_copy`;
+    let counter = 2;
+    while (this.get(workspaceId, newShapeId)) {
+      newShapeId = `${shapeId}_copy${counter}`;
+      counter++;
+    }
+
+    const sourceRows = rowService.list(workspaceId, shapeId);
+
+    const newShape = this.create(
+      workspaceId,
+      newShapeId,
+      sourceShape.shapeLabel || undefined,
+      sourceShape.resourceURI || undefined,
+      sourceShape.folderId,
+      sourceShape.description || undefined
+    );
+
+    for (const row of sourceRows) {
+      rowService.create(workspaceId, newShapeId, {
+        rowOrder: row.rowOrder,
+        propertyId: row.propertyId ?? undefined,
+        propertyLabel: row.propertyLabel ?? undefined,
+        mandatory: row.mandatory ?? undefined,
+        repeatable: row.repeatable ?? undefined,
+        valueNodeType: row.valueNodeType ?? undefined,
+        valueDataType: row.valueDataType ?? undefined,
+        valueShape: row.valueShape ?? undefined,
+        valueConstraint: row.valueConstraint ?? undefined,
+        valueConstraintType: row.valueConstraintType ?? undefined,
+        lcDefaultLiteral: row.lcDefaultLiteral ?? undefined,
+        lcDefaultURI: row.lcDefaultURI ?? undefined,
+        note: row.note ?? undefined,
+        lcDataTypeURI: row.lcDataTypeURI ?? undefined,
+        lcRemark: row.lcRemark ?? undefined
+      });
+    }
+
+    return { shape: newShape, rowsCopied: sourceRows.length };
+  },
+
   copyToWorkspace(sourceWorkspaceId: string, shapeId: string, targetWorkspaceId: string): { shape: Shape; rowsCopied: number; overwrote: boolean } {
     // Get source shape
     const sourceShape = this.get(sourceWorkspaceId, shapeId);

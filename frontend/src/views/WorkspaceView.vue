@@ -40,7 +40,7 @@
             {{ sidebarCollapsed ? '&raquo;' : '&laquo;' }}
           </button>
         </div>
-        <div v-if="!sidebarCollapsed" class="sidebar-content">
+        <div v-if="!sidebarCollapsed" class="sidebar-content" @scroll.passive="closeShapeMenu">
           <div class="shape-search">
             <input
               type="text"
@@ -101,7 +101,7 @@
                 v-for="shape in rootShapes"
                 :key="shape.shapeId"
                 class="shape-item"
-                :class="{ active: currentShapeId === shape.shapeId, dragging: draggedShapeId === shape.shapeId }"
+                :class="{ active: currentShapeId === shape.shapeId, dragging: draggedShapeId === shape.shapeId, 'menu-open': shapeMenuFor?.shapeId === shape.shapeId }"
                 draggable="true"
                 @click="selectShape(shape.shapeId)"
                 @dragstart="handleShapeDragStart(shape.shapeId, $event)"
@@ -110,11 +110,8 @@
                 <span class="shape-name">{{ shape.shapeId }}</span>
                 <span v-if="shape.shapeLabel" class="shape-label">{{ shape.shapeLabel }}</span>
                 <div v-if="!workspace?.isLocked" class="shape-actions">
-                  <button class="btn btn-icon btn-small" @click.stop="editShape(shape)" title="Rename">
-                    &#9998;
-                  </button>
-                  <button class="btn btn-icon btn-small btn-danger" @click.stop="confirmDeleteShape(shape)" title="Delete">
-                    &times;
+                  <button class="btn btn-icon btn-small" @click.stop="toggleShapeMenu(shape, $event)" title="Shape actions">
+                    &#8942;
                   </button>
                 </div>
               </div>
@@ -151,7 +148,7 @@
                   v-for="shape in shapesByFolder.get(folder.id) || []"
                   :key="shape.shapeId"
                   class="shape-item"
-                  :class="{ active: currentShapeId === shape.shapeId, dragging: draggedShapeId === shape.shapeId }"
+                  :class="{ active: currentShapeId === shape.shapeId, dragging: draggedShapeId === shape.shapeId, 'menu-open': shapeMenuFor?.shapeId === shape.shapeId }"
                   draggable="true"
                   @click="selectShape(shape.shapeId)"
                   @dragstart="handleShapeDragStart(shape.shapeId, $event)"
@@ -160,11 +157,8 @@
                   <span class="shape-name">{{ shape.shapeId }}</span>
                   <span v-if="shape.shapeLabel" class="shape-label">{{ shape.shapeLabel }}</span>
                   <div v-if="!workspace?.isLocked" class="shape-actions">
-                    <button class="btn btn-icon btn-small" @click.stop="editShape(shape)" title="Rename">
-                      &#9998;
-                    </button>
-                    <button class="btn btn-icon btn-small btn-danger" @click.stop="confirmDeleteShape(shape)" title="Delete">
-                      &times;
+                    <button class="btn btn-icon btn-small" @click.stop="toggleShapeMenu(shape, $event)" title="Shape actions">
+                      &#8942;
                     </button>
                   </div>
                 </div>
@@ -198,6 +192,25 @@
           @navigate-to-shape="navigateToShape"
         />
       </main>
+    </div>
+
+    <!-- Shape actions dropdown menu -->
+    <div
+      v-if="shapeMenuFor"
+      class="shape-menu"
+      :style="{ top: shapeMenuPosition.top + 'px', left: shapeMenuPosition.left + 'px' }"
+      @click.stop
+    >
+      <button class="shape-menu-item" @click="menuRenameShape">
+        <span class="shape-menu-icon">&#9998;</span> Rename
+      </button>
+      <button class="shape-menu-item" @click="menuDuplicateShape">
+        <span class="shape-menu-icon">&#10697;</span> Duplicate
+      </button>
+      <div class="shape-menu-divider"></div>
+      <button class="shape-menu-item danger" @click="menuDeleteShape">
+        <span class="shape-menu-icon">&times;</span> Delete
+      </button>
     </div>
 
     <!-- New Shape Dialog -->
@@ -448,6 +461,10 @@ export default defineComponent({
     const shapeToDelete = ref<Shape | null>(null);
     const shapeUsages = ref<string[]>([]);
 
+    // Shape actions dropdown menu
+    const shapeMenuFor = ref<Shape | null>(null);
+    const shapeMenuPosition = ref({ top: 0, left: 0 });
+
     const showNamespaceManager = ref(false);
     const showOptionsDialog = ref(false);
     const workspaceOptions = ref<WorkspaceOptions>({ useLCColumns: false });
@@ -676,6 +693,58 @@ export default defineComponent({
       }
     }
 
+    // Shape actions dropdown menu
+    function toggleShapeMenu(shape: Shape, event: MouseEvent) {
+      if (shapeMenuFor.value?.shapeId === shape.shapeId) {
+        shapeMenuFor.value = null;
+        return;
+      }
+      const button = event.currentTarget as HTMLElement;
+      const rect = button.getBoundingClientRect();
+      const menuWidth = 150;
+      const menuHeight = 120;
+      shapeMenuPosition.value = {
+        top: Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8),
+        left: Math.min(rect.left, window.innerWidth - menuWidth - 8)
+      };
+      shapeMenuFor.value = shape;
+    }
+
+    function closeShapeMenu() {
+      shapeMenuFor.value = null;
+    }
+
+    function menuRenameShape() {
+      if (!shapeMenuFor.value) return;
+      const shape = shapeMenuFor.value;
+      closeShapeMenu();
+      editShape(shape);
+    }
+
+    function menuDuplicateShape() {
+      if (!shapeMenuFor.value) return;
+      const shape = shapeMenuFor.value;
+      closeShapeMenu();
+      duplicateShape(shape);
+    }
+
+    function menuDeleteShape() {
+      if (!shapeMenuFor.value) return;
+      const shape = shapeMenuFor.value;
+      closeShapeMenu();
+      confirmDeleteShape(shape);
+    }
+
+    async function duplicateShape(shape: Shape) {
+      try {
+        const result = await shapeApi.duplicate(props.id, shape.shapeId);
+        await loadShapes();
+        selectShape(result.shape.shapeId);
+      } catch (e) {
+        alert((e as Error).message);
+      }
+    }
+
     async function updateShapeLabel(label: string) {
       if (!currentShapeId.value) return;
       try {
@@ -862,6 +931,7 @@ export default defineComponent({
     });
 
     onMounted(async () => {
+      document.addEventListener('click', closeShapeMenu);
       await loadWorkspace();
       // Only start polling if workspace was found
       if (workspace.value) {
@@ -870,6 +940,7 @@ export default defineComponent({
     });
 
     onUnmounted(() => {
+      document.removeEventListener('click', closeShapeMenu);
       stopPolling();
     });
 
@@ -892,6 +963,13 @@ export default defineComponent({
       showDeleteShapeDialog,
       shapeToDelete,
       shapeUsages,
+      shapeMenuFor,
+      shapeMenuPosition,
+      toggleShapeMenu,
+      closeShapeMenu,
+      menuRenameShape,
+      menuDuplicateShape,
+      menuDeleteShape,
       showNamespaceManager,
       goHome,
       selectShape,
@@ -1085,8 +1163,56 @@ export default defineComponent({
   gap: 0.25rem;
 }
 
-.shape-item:hover .shape-actions {
+.shape-item:hover .shape-actions,
+.shape-item.menu-open .shape-actions {
   display: flex;
+}
+
+/* Shape actions dropdown menu */
+.shape-menu {
+  position: fixed;
+  z-index: 1100;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 150px;
+  padding: 0.25rem 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shape-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: #2c3e50;
+  width: 100%;
+}
+
+.shape-menu-item:hover {
+  background: #f0f0f0;
+}
+
+.shape-menu-item.danger {
+  color: #e74c3c;
+}
+
+.shape-menu-icon {
+  width: 1rem;
+  text-align: center;
+}
+
+.shape-menu-divider {
+  height: 1px;
+  background: #eee;
+  margin: 0.25rem 0;
 }
 
 .main-content {

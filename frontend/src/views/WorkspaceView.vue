@@ -40,7 +40,7 @@
             {{ sidebarCollapsed ? '&raquo;' : '&laquo;' }}
           </button>
         </div>
-        <div v-if="!sidebarCollapsed" class="sidebar-content" @scroll.passive="closeShapeMenu">
+        <div v-if="!sidebarCollapsed" class="sidebar-content" @scroll.passive="closeMenus">
           <div class="shape-search">
             <input
               type="text"
@@ -127,7 +127,7 @@
             >
               <div
                 class="folder-header"
-                :class="{ 'drag-over': dragOverFolderId === folder.id }"
+                :class="{ 'drag-over': dragOverFolderId === folder.id, 'menu-open': folderMenuFor?.id === folder.id }"
                 @click="toggleFolder(folder.id)"
                 @dragover="handleFolderDragOver(folder.id, $event)"
                 @dragleave="handleFolderDragLeave"
@@ -138,8 +138,8 @@
                 <span class="folder-name">{{ folder.name }}</span>
                 <span class="folder-count">({{ shapesByFolder.get(folder.id)?.length || 0 }})</span>
                 <div v-if="!workspace?.isLocked" class="folder-actions">
-                  <button class="btn btn-icon btn-small btn-danger" @click.stop="deleteFolder(folder)" title="Delete folder">
-                    &times;
+                  <button class="btn btn-icon btn-small" @click.stop="toggleFolderMenu(folder, $event)" title="Folder actions">
+                    &#8942;
                   </button>
                 </div>
               </div>
@@ -211,6 +211,49 @@
       <button class="shape-menu-item danger" @click="menuDeleteShape">
         <span class="shape-menu-icon">&times;</span> Delete
       </button>
+    </div>
+
+    <!-- Folder actions dropdown menu -->
+    <div
+      v-if="folderMenuFor"
+      class="shape-menu"
+      :style="{ top: folderMenuPosition.top + 'px', left: folderMenuPosition.left + 'px' }"
+      @click.stop
+    >
+      <button class="shape-menu-item" @click="menuRenameFolder">
+        <span class="shape-menu-icon">&#9998;</span> Rename
+      </button>
+      <div class="shape-menu-divider"></div>
+      <button class="shape-menu-item danger" @click="menuDeleteFolder">
+        <span class="shape-menu-icon">&times;</span> Delete
+      </button>
+    </div>
+
+    <!-- Rename Folder Dialog -->
+    <div v-if="showRenameFolderDialog" class="dialog-overlay" @click.self="showRenameFolderDialog = false">
+      <div class="dialog">
+        <h2>Rename Folder</h2>
+        <form @submit.prevent="doRenameFolder">
+          <div class="form-group">
+            <label for="renameFolderName">Folder Name</label>
+            <input
+              id="renameFolderName"
+              ref="renameFolderNameInput"
+              v-model="renameFolderData.name"
+              type="text"
+              required
+            />
+          </div>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn-secondary" @click="showRenameFolderDialog = false">
+              Cancel
+            </button>
+            <button type="submit" class="btn btn-primary" :disabled="!renameFolderData.name.trim()">
+              Save
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <!-- New Shape Dialog -->
@@ -465,6 +508,14 @@ export default defineComponent({
     const shapeMenuFor = ref<Shape | null>(null);
     const shapeMenuPosition = ref({ top: 0, left: 0 });
 
+    // Folder actions dropdown menu
+    const folderMenuFor = ref<Folder | null>(null);
+    const folderMenuPosition = ref({ top: 0, left: 0 });
+
+    const showRenameFolderDialog = ref(false);
+    const renameFolderData = ref({ id: 0, name: '' });
+    const renameFolderNameInput = ref<HTMLInputElement | null>(null);
+
     const showNamespaceManager = ref(false);
     const showOptionsDialog = ref(false);
     const workspaceOptions = ref<WorkspaceOptions>({ useLCColumns: false });
@@ -694,44 +745,49 @@ export default defineComponent({
     }
 
     // Shape actions dropdown menu
+    function menuPositionFor(event: MouseEvent, menuHeight: number) {
+      const button = event.currentTarget as HTMLElement;
+      const rect = button.getBoundingClientRect();
+      const menuWidth = 150;
+      return {
+        top: Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8),
+        left: Math.min(rect.left, window.innerWidth - menuWidth - 8)
+      };
+    }
+
     function toggleShapeMenu(shape: Shape, event: MouseEvent) {
+      folderMenuFor.value = null;
       if (shapeMenuFor.value?.shapeId === shape.shapeId) {
         shapeMenuFor.value = null;
         return;
       }
-      const button = event.currentTarget as HTMLElement;
-      const rect = button.getBoundingClientRect();
-      const menuWidth = 150;
-      const menuHeight = 120;
-      shapeMenuPosition.value = {
-        top: Math.min(rect.bottom + 4, window.innerHeight - menuHeight - 8),
-        left: Math.min(rect.left, window.innerWidth - menuWidth - 8)
-      };
+      shapeMenuPosition.value = menuPositionFor(event, 120);
       shapeMenuFor.value = shape;
     }
 
-    function closeShapeMenu() {
+    function closeMenus() {
       shapeMenuFor.value = null;
+      folderMenuFor.value = null;
     }
 
     function menuRenameShape() {
       if (!shapeMenuFor.value) return;
       const shape = shapeMenuFor.value;
-      closeShapeMenu();
+      closeMenus();
       editShape(shape);
     }
 
     function menuDuplicateShape() {
       if (!shapeMenuFor.value) return;
       const shape = shapeMenuFor.value;
-      closeShapeMenu();
+      closeMenus();
       duplicateShape(shape);
     }
 
     function menuDeleteShape() {
       if (!shapeMenuFor.value) return;
       const shape = shapeMenuFor.value;
-      closeShapeMenu();
+      closeMenus();
       confirmDeleteShape(shape);
     }
 
@@ -740,6 +796,44 @@ export default defineComponent({
         const result = await shapeApi.duplicate(props.id, shape.shapeId);
         await loadShapes();
         selectShape(result.shape.shapeId);
+      } catch (e) {
+        alert((e as Error).message);
+      }
+    }
+
+    // Folder actions dropdown menu
+    function toggleFolderMenu(folder: Folder, event: MouseEvent) {
+      shapeMenuFor.value = null;
+      if (folderMenuFor.value?.id === folder.id) {
+        folderMenuFor.value = null;
+        return;
+      }
+      folderMenuPosition.value = menuPositionFor(event, 90);
+      folderMenuFor.value = folder;
+    }
+
+    function menuRenameFolder() {
+      if (!folderMenuFor.value) return;
+      const folder = folderMenuFor.value;
+      closeMenus();
+      renameFolderData.value = { id: folder.id, name: folder.name };
+      showRenameFolderDialog.value = true;
+    }
+
+    function menuDeleteFolder() {
+      if (!folderMenuFor.value) return;
+      const folder = folderMenuFor.value;
+      closeMenus();
+      deleteFolder(folder);
+    }
+
+    async function doRenameFolder() {
+      const name = renameFolderData.value.name.trim();
+      if (!name) return;
+      try {
+        await folderApi.update(props.id, renameFolderData.value.id, name);
+        showRenameFolderDialog.value = false;
+        await loadFolders();
       } catch (e) {
         alert((e as Error).message);
       }
@@ -930,8 +1024,14 @@ export default defineComponent({
       }
     });
 
+    watch(showRenameFolderDialog, (isOpen) => {
+      if (isOpen) {
+        nextTick(() => renameFolderNameInput.value?.focus());
+      }
+    });
+
     onMounted(async () => {
-      document.addEventListener('click', closeShapeMenu);
+      document.addEventListener('click', closeMenus);
       await loadWorkspace();
       // Only start polling if workspace was found
       if (workspace.value) {
@@ -940,7 +1040,7 @@ export default defineComponent({
     });
 
     onUnmounted(() => {
-      document.removeEventListener('click', closeShapeMenu);
+      document.removeEventListener('click', closeMenus);
       stopPolling();
     });
 
@@ -966,10 +1066,19 @@ export default defineComponent({
       shapeMenuFor,
       shapeMenuPosition,
       toggleShapeMenu,
-      closeShapeMenu,
+      closeMenus,
       menuRenameShape,
       menuDuplicateShape,
       menuDeleteShape,
+      folderMenuFor,
+      folderMenuPosition,
+      toggleFolderMenu,
+      menuRenameFolder,
+      menuDeleteFolder,
+      showRenameFolderDialog,
+      renameFolderData,
+      renameFolderNameInput,
+      doRenameFolder,
       showNamespaceManager,
       goHome,
       selectShape,
@@ -1509,7 +1618,8 @@ export default defineComponent({
   display: none;
 }
 
-.folder-header:hover .folder-actions {
+.folder-header:hover .folder-actions,
+.folder-header.menu-open .folder-actions {
   display: flex;
 }
 

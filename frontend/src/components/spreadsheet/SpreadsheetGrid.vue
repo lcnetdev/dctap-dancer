@@ -5,7 +5,7 @@
     tabindex="0"
     ref="containerRef"
   >
-    <!-- Toolbar -->
+    <!-- Toolbar above the grid -->
     <div class="toolbar">
       <div class="toolbar-left">
         <span class="shape-id">{{ shapeId }}</span>
@@ -40,9 +40,9 @@
       </div>
     </div>
 
-    <!-- Grid -->
+    <!-- The grid itself -->
     <div class="grid-wrapper" ref="gridWrapper">
-      <table class="grid">
+      <table class="grid" :style="{ width: tableWidth + 'px' }">
         <thead>
           <tr>
             <th class="row-number-header">#</th>
@@ -53,6 +53,13 @@
               class="column-header"
             >
               {{ col.label }}
+              <span
+                class="col-resize-handle"
+                :class="{ active: resizingColumn === col.key }"
+                title="Drag to resize, double-click to reset"
+                @mousedown.stop.prevent="startColumnResize(col.key, $event)"
+                @dblclick.stop.prevent="resetColumnWidth(col.key)"
+              ></span>
             </th>
           </tr>
         </thead>
@@ -89,7 +96,7 @@
               @mouseenter="showErrorTooltip(row, col.key, rowIndex, colIndex, $event)"
               @mouseleave="hideErrorTooltip"
             >
-              <!-- Checkbox columns are always shown inline -->
+              <!-- Checkbox cells render their control inline; no edit mode for them -->
               <template v-if="col.editorType === 'checkbox'">
                 <input
                   type="checkbox"
@@ -100,7 +107,7 @@
                   @click.stop
                 />
               </template>
-              <!-- Dropdown columns are always shown inline -->
+              <!-- Dropdowns are always inline too -->
               <template v-else-if="col.editorType === 'dropdown'">
                 <select
                   class="inline-dropdown"
@@ -166,7 +173,7 @@
       </table>
     </div>
 
-    <!-- Error Tooltip -->
+    <!-- Floating error tooltip -->
     <div
       v-if="errorTooltip.visible"
       class="error-tooltip"
@@ -175,7 +182,7 @@
       {{ errorTooltip.message }}
     </div>
 
-    <!-- Context Menu -->
+    <!-- Right-click menu -->
     <div
       v-if="contextMenu.visible"
       class="context-menu"
@@ -190,7 +197,7 @@
       <button @click="pasteFromClipboard">Paste</button>
     </div>
 
-    <!-- Send to Workspace Modal -->
+    <!-- Send-to-workspace dialog -->
     <div v-if="showSendToWorkspace" class="dialog-overlay" @click.self="closeSendToWorkspace">
       <div class="dialog send-to-workspace-dialog">
         <h2>Send to Other Workspace</h2>
@@ -246,7 +253,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, ref, computed, onMounted, watch, nextTick, PropType } from 'vue';
+import { defineComponent, ref, computed, onMounted, onUnmounted, watch, nextTick, PropType } from 'vue';
 import { rowApi, validationApi, workspaceApi, shapeApi } from '@/services/api';
 import type { StatementRow, Shape, Namespace, Selection, UndoState, ColumnDef, Workspace } from '@/types';
 import { COLUMNS } from '@/types';
@@ -302,42 +309,42 @@ export default defineComponent({
     const containerRef = ref<HTMLDivElement | null>(null);
     const gridWrapper = ref<HTMLDivElement | null>(null);
 
-    // Data
+    // Rows and loading state
     const rows = ref<StatementRow[]>([]);
     const loading = ref(false);
     const saving = ref(false);
     const hasUnsavedChanges = ref(false);
 
-    // Selection
+    // The range of cells currently selected
     const selection = ref<Selection | null>(null);
     const isSelecting = ref(false);
 
-    // Editing
+    // The cell being edited, if any
     const editingCell = ref<{ row: number; col: number } | null>(null);
 
-    // Undo/Redo
+    // Undo/redo history
     const undoStack = ref<UndoState[]>([]);
     const redoStack = ref<UndoState[]>([]);
 
-    // Context menu
+    // Right-click menu state
     const contextMenu = ref({ visible: false, x: 0, y: 0 });
 
-    // Error tooltip
+    // Where the error tooltip sits and what it says
     const errorTooltip = ref({ visible: false, x: 0, y: 0, message: '' });
 
-    // Clipboard
+    // Our own clipboard, for when the system one is off-limits
     const clipboardData = ref<string[][] | null>(null);
     const cutMode = ref(false);
 
-    // Save indicator
+    // The brief "Saved" flash
     const showSavedIndicator = ref(false);
     let savedIndicatorTimeout: ReturnType<typeof setTimeout> | null = null;
 
-    // Drag and drop for row reordering
+    // Row reordering by dragging
     const draggedRowIndex = ref<number | null>(null);
     const dragOverRowIndex = ref<number | null>(null);
 
-    // Send to workspace modal
+    // State for the send-to-workspace dialog
     const showSendToWorkspace = ref(false);
     const allWorkspaces = ref<Workspace[]>([]);
     const loadingWorkspaces = ref(false);
@@ -349,20 +356,98 @@ export default defineComponent({
       return allWorkspaces.value.filter(ws => ws.id !== props.workspaceId);
     });
 
-    // LC-specific columns that are hidden when useLCColumns is false
+    // Library-of-Congress columns, kept out of sight unless useLCColumns is on
     const LC_COLUMN_KEYS = ['resourceURI', 'lcDefaultLiteral', 'lcDefaultURI', 'lcDataTypeURI', 'lcRemark'];
 
-    const columns = computed(() => {
-      if (props.useLCColumns) {
-        return COLUMNS;
+    // Column widths: resizing a column remembers the new width in localStorage
+    // under the column key, shared by every sheet and workspace. Columns with
+    // nothing saved just get the COLUMNS default.
+    const COLUMN_WIDTHS_KEY = 'dctap-column-widths';
+    const MIN_COLUMN_WIDTH = 50;
+
+    function loadColumnWidths(): Record<string, number> {
+      try {
+        const stored = localStorage.getItem(COLUMN_WIDTHS_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed as Record<string, number>;
+          }
+        }
+      } catch {
+        // localStorage is missing or unreadable — just fall back to defaults
       }
-      return COLUMNS.filter(col => !LC_COLUMN_KEYS.includes(col.key));
+      return {};
+    }
+
+    const columnWidths = ref<Record<string, number>>(loadColumnWidths());
+    const resizingColumn = ref<string | null>(null);
+    let resizeStartX = 0;
+    let resizeStartWidth = 0;
+
+    function saveColumnWidths() {
+      try {
+        localStorage.setItem(COLUMN_WIDTHS_KEY, JSON.stringify(columnWidths.value));
+      } catch {
+        // Can't save it, but the new width lasts this session at least
+      }
+    }
+
+    function startColumnResize(key: string, event: MouseEvent) {
+      const col = columns.value.find(c => c.key === key);
+      if (!col) return;
+      resizingColumn.value = key;
+      resizeStartX = event.clientX;
+      resizeStartWidth = col.width;
+      document.addEventListener('mousemove', handleColumnResize);
+      document.addEventListener('mouseup', stopColumnResize);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    function handleColumnResize(event: MouseEvent) {
+      if (!resizingColumn.value) return;
+      const width = Math.max(MIN_COLUMN_WIDTH, resizeStartWidth + (event.clientX - resizeStartX));
+      columnWidths.value = { ...columnWidths.value, [resizingColumn.value]: width };
+    }
+
+    function stopColumnResize() {
+      if (!resizingColumn.value) return;
+      resizingColumn.value = null;
+      document.removeEventListener('mousemove', handleColumnResize);
+      document.removeEventListener('mouseup', stopColumnResize);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      saveColumnWidths();
+    }
+
+    function resetColumnWidth(key: string) {
+      const next = { ...columnWidths.value };
+      delete next[key];
+      columnWidths.value = next;
+      saveColumnWidths();
+    }
+
+    const columns = computed(() => {
+      const base = props.useLCColumns
+        ? COLUMNS
+        : COLUMNS.filter(col => !LC_COLUMN_KEYS.includes(col.key));
+      return base.map(col => ({
+        ...col,
+        width: columnWidths.value[col.key] ?? col.width
+      }));
     });
 
-    // Create display rows (actual rows + empty rows)
+    // The table needs an explicit width, otherwise table-layout: fixed ignores
+    // the individual column widths (the extra 50px is the row-number column).
+    const tableWidth = computed(() =>
+      columns.value.reduce((sum, col) => sum + col.width, 50)
+    );
+
+    // What we render: the saved rows plus blank ones at the bottom
     const displayRows = computed(() => {
       const result: Array<StatementRow | Partial<StatementRow>> = [...rows.value];
-      // Add empty rows
+      // Pad with blank rows
       for (let i = 0; i < EMPTY_ROWS_COUNT; i++) {
         result.push(createEmptyRow(rows.value.length + i));
       }
@@ -396,7 +481,7 @@ export default defineComponent({
       try {
         const loadedRows = await rowApi.list(props.workspaceId, props.shapeId);
 
-        // Clean up any empty rows that shouldn't exist
+        // Rows sometimes get saved with nothing in them — hunt those down
         const dataColumnKeys = ['propertyId', 'propertyLabel', 'mandatory', 'repeatable',
                                 'valueNodeType', 'valueDataType', 'valueShape', 'valueConstraint',
                                 'valueConstraintType', 'note', 'lcDefaultLiteral', 'lcDefaultURI',
@@ -419,7 +504,7 @@ export default defineComponent({
           }
         }
 
-        // Delete empty rows from backend
+        // Remove them from the backend as well
         if (emptyRowIds.length > 0) {
           console.log('Deleting empty rows:', emptyRowIds);
           await rowApi.bulkDelete(props.workspaceId, props.shapeId, emptyRowIds);
@@ -435,11 +520,11 @@ export default defineComponent({
 
     function getCellValue(row: Partial<StatementRow>, key: string, rowIndex?: number): string | null {
       if (key === 'shapeLabel') {
-        // Only first row shows shape label
+        // The shape label belongs to the first row only
         return rowIndex === 0 ? props.shapeLabel : null;
       }
       if (key === 'resourceURI') {
-        // Only first row shows resource URI
+        // Resource URI likewise
         return rowIndex === 0 ? props.resourceURI : null;
       }
       return (row as Record<string, unknown>)[key] as string | null;
@@ -520,7 +605,7 @@ export default defineComponent({
       const { start, end } = selection.value;
       const minRow = Math.min(start.row, end.row);
       const maxRow = Math.max(start.row, end.row);
-      // Row is selected if selection spans all columns
+      // A row only counts as selected when every column is in the selection
       const minCol = Math.min(start.col, end.col);
       const maxCol = Math.max(start.col, end.col);
       return rowIndex >= minRow && rowIndex <= maxRow && minCol === 0 && maxCol === columns.value.length - 1;
@@ -528,12 +613,12 @@ export default defineComponent({
 
     function selectRow(rowIndex: number, event: MouseEvent) {
       if (event.shiftKey && selection.value) {
-        // Extend selection to include this row
+        // Stretch the selection out to this row
         selection.value.end = { row: rowIndex, col: columns.value.length - 1 };
-        // Ensure start col is 0 for full row selection
+        // Anchor the start at column 0 so the whole row is taken
         selection.value.start.col = 0;
       } else {
-        // Select entire row
+        // Grab the entire row
         selection.value = {
           start: { row: rowIndex, col: 0 },
           end: { row: rowIndex, col: columns.value.length - 1 }
@@ -546,34 +631,34 @@ export default defineComponent({
       return editingCell.value?.row === rowIndex && editingCell.value?.col === colIndex;
     }
 
-    // Mouse handlers
+    // Mouse handling
     function handleMouseDown(rowIndex: number, colIndex: number, event: MouseEvent) {
-      // Right click for context menu
+      // Right-click opens the context menu
       if (event.button === 2) {
         event.preventDefault();
         showContextMenu(event.clientX, event.clientY);
         return;
       }
 
-      // Hide context menu
+      // Any other click closes the context menu
       contextMenu.value.visible = false;
 
-      // If clicking within the currently editing cell, don't interfere
-      // This allows clicking inside a textarea/input to position the cursor
+      // Clicks on the cell being edited are left alone — they're placing
+      // the cursor inside the input
       if (editingCell.value && editingCell.value.row === rowIndex && editingCell.value.col === colIndex) {
         return;
       }
 
-      // Cancel editing if clicking elsewhere
+      // Clicking anywhere else closes the editor
       if (editingCell.value) {
         finishEditing();
       }
 
       if (event.shiftKey && selection.value) {
-        // Extend selection
+        // Stretch the selection to here
         selection.value.end = { row: rowIndex, col: colIndex };
       } else {
-        // Start new selection
+        // Start a fresh selection
         selection.value = {
           start: { row: rowIndex, col: colIndex },
           end: { row: rowIndex, col: colIndex }
@@ -581,7 +666,7 @@ export default defineComponent({
         isSelecting.value = true;
       }
 
-      // Focus container for keyboard events
+      // Take focus so the keyboard keeps working
       containerRef.value?.focus();
     }
 
@@ -595,16 +680,16 @@ export default defineComponent({
       isSelecting.value = false;
     }
 
-    // Drag and drop for row reordering
+    // Drag-to-reorder handlers
     function handleDragStart(rowIndex: number, event: DragEvent) {
       const row = displayRows.value[rowIndex];
-      if (!row.id) return; // Can't drag empty rows
+      if (!row.id) return; // the blank placeholder rows can't be dragged
 
       draggedRowIndex.value = rowIndex;
       event.dataTransfer!.effectAllowed = 'move';
       event.dataTransfer!.setData('text/plain', String(rowIndex));
 
-      // Add dragging class after a small delay
+      // Apply the dragging style once the drag is actually underway
       setTimeout(() => {
         const tr = (event.target as HTMLElement).closest('tr');
         tr?.classList.add('dragging');
@@ -614,7 +699,7 @@ export default defineComponent({
     function handleDragEnd() {
       draggedRowIndex.value = null;
       dragOverRowIndex.value = null;
-      // Remove dragging class from all rows
+      // Clear the dragging style wherever it ended up
       document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
     }
 
@@ -623,7 +708,7 @@ export default defineComponent({
       if (rowIndex === draggedRowIndex.value) return;
 
       const targetRow = displayRows.value[rowIndex];
-      // Only allow dropping on existing rows or the first empty row
+      // Only real rows and the first blank row accept a drop
       if (!targetRow.id && rowIndex > rows.value.length) return;
 
       dragOverRowIndex.value = rowIndex;
@@ -640,22 +725,22 @@ export default defineComponent({
 
       if (!sourceRow) return;
 
-      // Reorder rows
+      // Move the row to its new spot
       const newRows = [...rows.value];
       newRows.splice(sourceIndex, 1);
 
-      // Adjust target index if needed
+      // Compensate for the row we just removed
       const adjustedTarget = targetRowIndex > sourceIndex ? targetRowIndex - 1 : targetRowIndex;
       newRows.splice(adjustedTarget, 0, sourceRow);
 
-      // Update row orders
+      // Renumber everything
       newRows.forEach((row, index) => {
         row.rowOrder = index;
       });
 
       rows.value = newRows;
 
-      // Save to backend
+      // Persist the new order
       saving.value = true;
       try {
         await rowApi.reorder(props.workspaceId, props.shapeId, newRows.map(r => r.id));
@@ -681,43 +766,43 @@ export default defineComponent({
       }, 2000);
     }
 
-    // Keyboard handlers
+    // Keyboard handling
     function handleKeyDown(event: KeyboardEvent) {
-      // Don't handle if editing
+      // While a cell is open for editing, its editor owns the keys
       if (editingCell.value) return;
 
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modKey = isMac ? event.metaKey : event.ctrlKey;
 
-      // Navigation
+      // Arrow keys
       if (event.key.startsWith('Arrow')) {
         event.preventDefault();
         navigate(event.key, event.shiftKey);
         return;
       }
 
-      // Enter to edit
+      // Enter opens the editor
       if (event.key === 'Enter' && selection.value) {
         event.preventDefault();
         startEditing(selection.value.start.row, selection.value.start.col);
         return;
       }
 
-      // Tab to move
+      // Tab hops to the next cell
       if (event.key === 'Tab') {
         event.preventDefault();
         moveSelection(event.shiftKey ? -1 : 1, 0);
         return;
       }
 
-      // Delete/Backspace to clear
+      // Delete/Backspace empties the selection
       if ((event.key === 'Delete' || event.key === 'Backspace') && selection.value) {
         event.preventDefault();
         clearSelection();
         return;
       }
 
-      // Undo/Redo
+      // Undo and redo
       if (modKey && event.key === 'z') {
         event.preventDefault();
         if (event.shiftKey) {
@@ -734,7 +819,7 @@ export default defineComponent({
         return;
       }
 
-      // Copy/Cut/Paste
+      // Clipboard shortcuts
       if (modKey && event.key === 'c') {
         event.preventDefault();
         copySelection();
@@ -753,7 +838,7 @@ export default defineComponent({
         return;
       }
 
-      // Start editing on any printable character
+      // Typing any printable character jumps straight into editing
       if (event.key.length === 1 && !modKey && selection.value) {
         startEditing(selection.value.start.row, selection.value.start.col, event.key);
       }
@@ -771,7 +856,7 @@ export default defineComponent({
       }
 
       if (shiftKey) {
-        // Extend selection
+        // Grow the selection
         const newRow = Math.max(0, Math.min(displayRows.value.length - 1, selection.value.end.row + delta.row));
         const newCol = Math.max(0, Math.min(columns.value.length - 1, selection.value.end.col + delta.col));
         selection.value.end = { row: newRow, col: newCol };
@@ -799,10 +884,10 @@ export default defineComponent({
       if (!wrapper) return;
 
       const rowEl = wrapper.querySelectorAll<HTMLTableRowElement>('tbody tr')[rowIndex];
-      const cell = rowEl?.cells[colIndex + 1]; // first cell is the row number
+      const cell = rowEl?.cells[colIndex + 1]; // skip past the row-number cell
       if (!cell) return;
 
-      // At the first row/column, scroll to the edge so headers/row numbers are visible
+      // On the first row/column, snap to the edge so the headers stay visible
       if (rowIndex === 0) wrapper.scrollTop = 0;
       if (colIndex === 0) wrapper.scrollLeft = 0;
 
@@ -827,26 +912,26 @@ export default defineComponent({
       }
     }
 
-    // Editing
+    // Opening and closing cell editors
     function startEditing(rowIndex: number, colIndex: number, initialValue?: string) {
       const col = columns.value[colIndex];
       const row = displayRows.value[rowIndex];
 
-      // Check if cell is disabled
+      // Disabled cells are off-limits
       if (isCellDisabled(row as StatementRow, col)) return;
 
-      // Hide error tooltip when editing starts
+      // The tooltip would only get in the way here
       errorTooltip.value.visible = false;
 
       editingCell.value = { row: rowIndex, col: colIndex };
 
-      // If initial value provided (from typing), it will be handled by the editor
+      // A typed-in starting value is the editor's problem
     }
 
     function finishEditing() {
       console.log('finishEditing called, editingCell was:', editingCell.value);
       editingCell.value = null;
-      // Refocus container for keyboard navigation
+      // Hand focus back so keys work again
       nextTick(() => {
         containerRef.value?.focus();
       });
@@ -855,7 +940,7 @@ export default defineComponent({
     function cancelEditing() {
       console.log('cancelEditing called');
       editingCell.value = null;
-      // Refocus container for keyboard navigation
+      // Hand focus back so keys work again
       nextTick(() => {
         containerRef.value?.focus();
       });
@@ -878,7 +963,7 @@ export default defineComponent({
       const isNewRow = !row.id;
       const oldValue = getCellValue(row as StatementRow, key);
 
-      // Handle shape label separately
+      // Shape label takes a different path
       if (key === 'shapeLabel') {
         if (value !== props.shapeLabel) {
           emit('shape-label-change', value);
@@ -886,7 +971,7 @@ export default defineComponent({
         return;
       }
 
-      // Handle description separately
+      // Description too
       if (key === 'description') {
         if (value !== props.description) {
           emit('description-change', value);
@@ -894,7 +979,7 @@ export default defineComponent({
         return;
       }
 
-      // Handle resource URI separately
+      // And resource URI
       if (key === 'resourceURI') {
         if (value !== props.resourceURI) {
           emit('resource-uri-change', value);
@@ -902,10 +987,10 @@ export default defineComponent({
         return;
       }
 
-      // Don't save if value hasn't changed
+      // No point saving if the value didn't change
       if (oldValue === value) return;
 
-      // Add to undo stack
+      // Remember this for undo
       pushUndo({
         type: 'cell',
         before: { rowIndex, key, value: oldValue, rowId: row.id },
@@ -915,19 +1000,19 @@ export default defineComponent({
         timestamp: Date.now()
       });
 
-      // Update local state
+      // Apply it locally right away
       (row as Record<string, unknown>)[key] = value;
 
-      // Save to backend
+      // Then persist
       saving.value = true;
       try {
         if (isNewRow) {
-          // Create new row with all current data from the display row
-          // This ensures all values entered before save are preserved
+          // Brand-new row: create it with everything the display row shows,
+          // so values typed before this save aren't dropped
           const rowData: Record<string, unknown> = {
             rowOrder: rowIndex
           };
-          // Copy all existing values from the display row
+          // Bring along whatever's already in the row
           const columnKeys = ['propertyId', 'propertyLabel', 'mandatory', 'repeatable',
                              'valueNodeType', 'valueDataType', 'valueShape', 'valueConstraint',
                              'valueConstraintType', 'note', 'lcDefaultLiteral', 'lcDefaultURI',
@@ -938,31 +1023,31 @@ export default defineComponent({
               rowData[k] = existingValue;
             }
           }
-          // Make sure the current edit is included
+          // The current edit goes in too
           rowData[key] = value;
 
           const newRow = await rowApi.create(props.workspaceId, props.shapeId, rowData);
-          // Insert the new row at the correct position to maintain display order
-          // This ensures subsequent edits to the same display row work correctly
+          // Slot it in where it appears on screen, so editing this display
+          // row again updates the right record
           const insertIndex = rowIndex < rows.value.length ? rowIndex : rows.value.length;
           rows.value.splice(insertIndex, 0, newRow);
         } else {
-          // Update existing row
+          // Existing row — a plain update
           await rowApi.update(props.workspaceId, props.shapeId, row.id as number, {
             [key]: value
           });
 
-          // Check if all data columns are now empty - if so, delete the row
+          // If every data column is now empty, the row should go
           const dataColumnKeys = ['propertyId', 'propertyLabel', 'mandatory', 'repeatable',
                                   'valueNodeType', 'valueDataType', 'valueShape', 'valueConstraint',
                                   'valueConstraintType', 'note', 'lcDefaultLiteral', 'lcDefaultURI',
                                   'lcDataTypeURI', 'lcRemark'];
           const actualRow = rows.value.find(r => r.id === row.id);
           if (actualRow) {
-            // Update local state first
+            // Local copy first
             (actualRow as Record<string, unknown>)[key] = value;
 
-            // Check if row is now empty - log all values for debugging
+            // Emptiness check, with the values logged for debugging
             console.log('Checking if row is empty after update. Row id:', row.id);
             console.log('Column values:');
             for (const k of dataColumnKeys) {
@@ -977,13 +1062,13 @@ export default defineComponent({
             console.log('isRowEmpty:', isRowEmpty);
 
             if (isRowEmpty) {
-              // Delete the empty row
+              // An empty row doesn't get to stay
               console.log('Deleting empty row:', row.id);
               await rowApi.delete(props.workspaceId, props.shapeId, row.id as number);
               rows.value = rows.value.filter(r => r.id !== row.id);
               console.log('Row deleted, rows.value now has', rows.value.length, 'rows');
             } else {
-              // Validate the row and save errors to backend
+              // Revalidate and stash whatever errors come back
               const result = await validationApi.validateRow(props.workspaceId, props.shapeId, row);
               actualRow.hasErrors = result.errors.length > 0 ? 1 : 0;
               actualRow.errorDetails = result.errors.length > 0 ? JSON.stringify(result.errors) : null;
@@ -1000,7 +1085,7 @@ export default defineComponent({
       }
     }
 
-    // Selection operations
+    // Selection actions
     async function clearSelection() {
       if (!selection.value) return;
 
@@ -1016,7 +1101,7 @@ export default defineComponent({
         for (let c = minCol; c <= maxCol; c++) {
           const row = displayRows.value[r];
           const col = columns.value[c];
-          if (!row.id) continue; // Skip empty rows
+          if (!row.id) continue; // placeholders have nothing to clear
 
           const oldValue = getCellValue(row as StatementRow, col.key);
           beforeState.push({ rowId: row.id, key: col.key, value: oldValue });
@@ -1034,7 +1119,7 @@ export default defineComponent({
         });
       }
 
-      // Save changes
+      // Push the changes through
       await saveBulkChanges(minRow, maxRow);
     }
 
@@ -1062,7 +1147,7 @@ export default defineComponent({
       clipboardData.value = data;
       cutMode.value = false;
 
-      // Also copy to system clipboard as TSV
+      // Mirror onto the system clipboard as TSV
       const tsvData = data.map(row => row.join('\t')).join('\n');
       navigator.clipboard.writeText(tsvData).catch(console.error);
     }
@@ -1075,7 +1160,7 @@ export default defineComponent({
     async function pasteFromClipboard() {
       if (!selection.value) return;
 
-      // Try to read from system clipboard first
+      // Prefer whatever the system clipboard has
       let pasteData = clipboardData.value;
       try {
         const text = await navigator.clipboard.readText();
@@ -1083,7 +1168,7 @@ export default defineComponent({
           pasteData = text.split('\n').map(row => row.split('\t'));
         }
       } catch {
-        // Use internal clipboard
+        // No luck — use our own copy
       }
 
       if (!pasteData) return;
@@ -1125,13 +1210,13 @@ export default defineComponent({
         });
       }
 
-      // If cut mode, clear the original cells
+      // A paste ends cut mode
       if (cutMode.value) {
         cutMode.value = false;
-        // Original cells would have been cleared on cut
+        // (the source cells were, in principle, cleared at cut time)
       }
 
-      // Save changes
+      // Persist everything
       await saveBulkChanges(startRow, startRow + pasteData.length - 1);
     }
 
@@ -1150,7 +1235,7 @@ export default defineComponent({
           const row = displayRows.value[r];
           if (!row.id) continue;
 
-          // Check if row is now empty
+          // See if the row got emptied
           const isRowEmpty = dataColumnKeys.every(k => {
             const v = (row as Record<string, unknown>)[k];
             return v === null || v === undefined || v === '';
@@ -1180,7 +1265,7 @@ export default defineComponent({
           await rowApi.bulkUpdate(props.workspaceId, props.shapeId, rowsToUpdate);
         }
 
-        // Delete empty rows
+        // Drop the empty ones
         if (emptyRowIds.length > 0) {
           console.log('Deleting empty rows after bulk change:', emptyRowIds);
           await rowApi.bulkDelete(props.workspaceId, props.shapeId, emptyRowIds);
@@ -1193,7 +1278,7 @@ export default defineComponent({
       }
     }
 
-    // Row operations
+    // Inserting and deleting rows
     async function insertRowAbove() {
       contextMenu.value.visible = false;
       if (!selection.value) return;
@@ -1211,7 +1296,7 @@ export default defineComponent({
     }
 
     async function insertRowAt(index: number) {
-      // Shift all subsequent rows
+      // Push everything below down one
       for (let i = index; i < rows.value.length; i++) {
         rows.value[i].rowOrder = i + 1;
       }
@@ -1260,14 +1345,14 @@ export default defineComponent({
 
       await rowApi.bulkDelete(props.workspaceId, props.shapeId, rowIdsToDelete);
 
-      // Remove from local state
+      // Forget them locally
       rows.value = rows.value.filter(r => !rowIdsToDelete.includes(r.id));
 
-      // Clear selection
+      // Nothing left to select
       selection.value = null;
     }
 
-    // Context menu
+    // Context menu open/close
     function showContextMenu(x: number, y: number) {
       contextMenu.value = { visible: true, x, y };
     }
@@ -1276,9 +1361,9 @@ export default defineComponent({
       contextMenu.value.visible = false;
     }
 
-    // Error tooltip functions
+    // Tooltip show/hide
     function showErrorTooltip(row: Partial<StatementRow>, key: string, rowIndex: number, colIndex: number, event: MouseEvent) {
-      // Don't show tooltip if cell is being edited
+      // No tooltip on a cell that's being edited
       if (editingCell.value?.row === rowIndex && editingCell.value?.col === colIndex) {
         errorTooltip.value.visible = false;
         return;
@@ -1303,10 +1388,10 @@ export default defineComponent({
       errorTooltip.value.visible = false;
     }
 
-    // Undo/Redo
+    // The undo machinery
     function pushUndo(state: UndoState) {
       undoStack.value.push(state);
-      redoStack.value = []; // Clear redo stack on new action
+      redoStack.value = []; // any new action wipes the redo history
     }
 
     async function undo() {
@@ -1323,7 +1408,7 @@ export default defineComponent({
           await rowApi.update(props.workspaceId, props.shapeId, rowId, { [key]: value });
         }
       }
-      // Handle other undo types...
+      // Other undo types aren't implemented yet...
     }
 
     async function redo() {
@@ -1340,7 +1425,7 @@ export default defineComponent({
           await rowApi.update(props.workspaceId, props.shapeId, rowId, { [key]: value });
         }
       }
-      // Handle other redo types...
+      // Same story for redo of other types...
     }
 
     function isValidShapeRef(shapeId: string): boolean {
@@ -1362,7 +1447,7 @@ export default defineComponent({
       }
     }
 
-    // Send to workspace functions
+    // Sending a shape off to another workspace
     async function openSendToWorkspace() {
       showSendToWorkspace.value = true;
       selectedTargetWorkspace.value = null;
@@ -1423,7 +1508,7 @@ export default defineComponent({
       }
     }
 
-    // Watch for shape changes
+    // A new shape means a clean slate
     watch(() => props.shapeId, () => {
       loadRows();
       selection.value = null;
@@ -1432,7 +1517,7 @@ export default defineComponent({
       redoStack.value = [];
     });
 
-    // Global mouse up handler
+    // Global listeners
     onMounted(() => {
       loadRows();
       document.addEventListener('mouseup', handleMouseUp);
@@ -1443,10 +1528,19 @@ export default defineComponent({
       });
     });
 
+    onUnmounted(() => {
+      // In case the component goes away mid-resize
+      stopColumnResize();
+    });
+
     return {
       containerRef,
       gridWrapper,
       columns,
+      tableWidth,
+      resizingColumn,
+      startColumnResize,
+      resetColumnWidth,
       displayRows,
       loading,
       saving,
@@ -1496,7 +1590,7 @@ export default defineComponent({
       hideErrorTooltip,
       isValidShapeRef,
       promptNavigateToShape,
-      // Send to workspace
+      // Send-to-workspace bits
       showSendToWorkspace,
       otherWorkspaces,
       loadingWorkspaces,
@@ -1712,6 +1806,23 @@ tr.row-selected td {
   overflow: hidden;
   text-overflow: ellipsis;
   user-select: none;
+  position: relative;
+}
+
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.col-resize-handle:hover,
+.col-resize-handle.active {
+  background: #2196f3;
+  opacity: 0.5;
 }
 
 .cell {
@@ -1890,7 +2001,7 @@ tr.row-selected td {
   border-color: transparent transparent #c0392b transparent;
 }
 
-/* Dialog/Modal styles */
+/* Shared dialog styles */
 .dialog-overlay {
   position: fixed;
   top: 0;
@@ -1961,7 +2072,7 @@ tr.row-selected td {
   background-color: #d5dbdb;
 }
 
-/* Send to workspace dialog specific styles */
+/* Just for the send-to-workspace dialog */
 .send-to-workspace-dialog {
   min-width: 450px;
 }

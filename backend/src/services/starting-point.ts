@@ -12,8 +12,11 @@ import {
 import {
   shapeService,
   rowService,
-  folderService
+  folderService,
+  pauseDbWrites,
+  resumeDbWrites
 } from './database.js';
+import { pauseCacheInvalidation, resumeCacheInvalidation } from './cache.js';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -77,76 +80,87 @@ export function importStartingPoints(
   // Track created shape IDs for the index
   const createdShapeIds: Array<{ shapeId: string; label: string }> = [];
 
-  // Create a shape for each menu group
-  for (const group of menuGroups) {
-    const shapeId = `${STARTING_POINT_PREFIX}${group.menuGroup.replace(/\s+/g, '_')}`;
-    const shapeLabel = group.menuGroup;
+  // Hold off on disk writes and cache invalidation while bulk creating. Skip this
+  // and every inserted row rewrites the entire workspace db and resets the cache.
+  pauseDbWrites();
+  pauseCacheInvalidation();
 
-    // Check if shape already exists
-    const existing = shapeService.get(workspaceId, shapeId);
-    if (existing) {
-      // Delete existing shape to replace it
-      shapeService.delete(workspaceId, shapeId);
+  try {
+    // One shape per menu group
+    for (const group of menuGroups) {
+      const shapeId = `${STARTING_POINT_PREFIX}${group.menuGroup.replace(/\s+/g, '_')}`;
+      const shapeLabel = group.menuGroup;
+
+      // See if a shape with this ID is already there
+      const existing = shapeService.get(workspaceId, shapeId);
+      if (existing) {
+        // Drop the old one so we can rebuild it
+        shapeService.delete(workspaceId, shapeId);
+      }
+
+      // Add the new shape
+      shapeService.create(
+        workspaceId,
+        shapeId,
+        shapeLabel,
+        undefined, // resourceURI left unset
+        folderId
+      );
+      shapesCreated++;
+      createdShapeIds.push({ shapeId, label: shapeLabel });
+
+      // One row per item on the menu
+      let rowOrder = 0;
+      for (const item of group.menuItems) {
+        // Take the first type and resource template — that covers the usual case
+        const type = item.type[0] || '';
+        const resourceTemplate = item.useResourceTemplates[0] || '';
+
+        rowService.create(workspaceId, shapeId, {
+          rowOrder,
+          propertyId: 'dcterms:hasPart',
+          propertyLabel: item.label,
+          valueNodeType: 'IRI',
+          valueShape: resourceTemplate,
+          valueConstraint: type,
+          valueConstraintType: 'picklist'
+        });
+        rowsCreated++;
+        rowOrder++;
+      }
     }
 
-    // Create the shape
+    // Make the index shape, replacing any previous version
+    const existingIndex = shapeService.get(workspaceId, STARTING_POINT_INDEX_ID);
+    if (existingIndex) {
+      shapeService.delete(workspaceId, STARTING_POINT_INDEX_ID);
+    }
+
     shapeService.create(
       workspaceId,
-      shapeId,
-      shapeLabel,
-      undefined, // resourceURI
+      STARTING_POINT_INDEX_ID,
+      'Starting Point Index',
+      undefined,
       folderId
     );
     shapesCreated++;
-    createdShapeIds.push({ shapeId, label: shapeLabel });
 
-    // Create rows for each menu item
-    let rowOrder = 0;
-    for (const item of group.menuItems) {
-      // Get the first type and resourceTemplate (most common case)
-      const type = item.type[0] || '';
-      const resourceTemplate = item.useResourceTemplates[0] || '';
-
-      rowService.create(workspaceId, shapeId, {
-        rowOrder,
+    // Index rows that point at each menu group's shape
+    let indexRowOrder = 0;
+    for (const { shapeId, label } of createdShapeIds) {
+      rowService.create(workspaceId, STARTING_POINT_INDEX_ID, {
+        rowOrder: indexRowOrder,
         propertyId: 'dcterms:hasPart',
-        propertyLabel: item.label,
-        valueNodeType: 'IRI',
-        valueShape: resourceTemplate,
-        valueConstraint: type,
-        valueConstraintType: 'picklist'
+        propertyLabel: label,
+        valueShape: shapeId
       });
       rowsCreated++;
-      rowOrder++;
+      indexRowOrder++;
     }
-  }
-
-  // Create or update the index shape
-  const existingIndex = shapeService.get(workspaceId, STARTING_POINT_INDEX_ID);
-  if (existingIndex) {
-    shapeService.delete(workspaceId, STARTING_POINT_INDEX_ID);
-  }
-
-  shapeService.create(
-    workspaceId,
-    STARTING_POINT_INDEX_ID,
-    'Starting Point Index',
-    undefined,
-    folderId
-  );
-  shapesCreated++;
-
-  // Create rows in the index linking to each menu group shape
-  let indexRowOrder = 0;
-  for (const { shapeId, label } of createdShapeIds) {
-    rowService.create(workspaceId, STARTING_POINT_INDEX_ID, {
-      rowOrder: indexRowOrder,
-      propertyId: 'dcterms:hasPart',
-      propertyLabel: label,
-      valueShape: shapeId
-    });
-    rowsCreated++;
-    indexRowOrder++;
+  } finally {
+    // Done: flush one consolidated save and switch cache invalidation back on
+    resumeDbWrites();
+    resumeCacheInvalidation();
   }
 
   return {

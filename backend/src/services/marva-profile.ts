@@ -13,8 +13,11 @@ import {
   rowService,
   namespaceService,
   optionsService,
-  folderService
+  folderService,
+  pauseDbWrites,
+  resumeDbWrites
 } from './database.js';
+import { pauseCacheInvalidation, resumeCacheInvalidation } from './cache.js';
 import { CreateRowRequest, DEFAULT_NAMESPACES } from '../types/dctap.js';
 import { v4 as uuidv4 } from 'uuid';
 import { isStartingPointShape, isInStartingPointFolder } from './starting-point.js';
@@ -179,6 +182,12 @@ export function importMarvaProfiles(
   // Create new workspace
   const workspace = workspaceService.create(workspaceName);
 
+  // Hold off on disk writes and cache invalidation while bulk loading. Skip this
+  // and every inserted row rewrites the entire workspace db and resets the cache,
+  // which gets quadratically slow and can hang imports of any real size.
+  pauseDbWrites();
+  pauseCacheInvalidation();
+
   // Set useLCColumns to true
   optionsService.update(workspace.id, { useLCColumns: true });
 
@@ -298,6 +307,10 @@ export function importMarvaProfiles(
       // ignore cleanup failure; surface the original error
     }
     throw err;
+  } finally {
+    // Done: flush one consolidated save and switch cache invalidation back on
+    resumeDbWrites();
+    resumeCacheInvalidation();
   }
 
   return {

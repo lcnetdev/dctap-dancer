@@ -346,55 +346,59 @@ export function importToWorkspace(
   const unknownNamespaces: string[] = [];
   const knownPrefixes = new Set(DEFAULT_NAMESPACES.map(ns => ns.prefix));
 
-  // Auto-create folders for shapes with shared prefixes
-  const shapeIds = Array.from(shapeGroups.keys());
-  const folderMap = buildFolderMap(workspace.id, shapeIds);
-
   // Create shapes and import rows
   let totalRows = 0;
   const allWarnings: ValidationError[] = [...(parseResult.warnings || [])];
 
-  for (const [shapeId, group] of shapeGroups) {
-    const folderId = folderMap.get(shapeId) ?? undefined;
-    shapeService.create(workspace.id, shapeId, group.label || undefined, group.resourceURI || undefined, folderId);
+  try {
+    // Set up folders on the fly so shapes that share a prefix live together
+    const shapeIds = Array.from(shapeGroups.keys());
+    const folderMap = buildFolderMap(workspace.id, shapeIds);
 
-    for (let i = 0; i < group.rows.length; i++) {
-      const rowData = group.rows[i];
+    for (const [shapeId, group] of shapeGroups) {
+      const folderId = folderMap.get(shapeId) ?? undefined;
+      shapeService.create(workspace.id, shapeId, group.label || undefined, group.resourceURI || undefined, folderId);
 
-      // Check for unknown prefixes
-      if (rowData.propertyId) {
-        const colonIndex = rowData.propertyId.indexOf(':');
-        if (colonIndex > 0) {
-          const prefix = rowData.propertyId.substring(0, colonIndex);
-          // Check for full URIs (http:// or https://)
-          if (prefix === 'http' || prefix === 'https') {
-            allWarnings.push({
-              message: `Shape "${shapeId}", row ${i + 1}: Property ID "${rowData.propertyId}" appears to be a full URI. Consider using a prefixed form.`,
-              severity: 'warning'
-            });
-          } else if (!knownPrefixes.has(prefix) && !unknownNamespaces.includes(prefix)) {
-            unknownNamespaces.push(prefix);
+      for (let i = 0; i < group.rows.length; i++) {
+        const rowData = group.rows[i];
+
+        // Flag any prefixes we don't recognize
+        if (rowData.propertyId) {
+          const colonIndex = rowData.propertyId.indexOf(':');
+          if (colonIndex > 0) {
+            const prefix = rowData.propertyId.substring(0, colonIndex);
+            // Watch for full URIs (http:// or https://) rather than prefixed IDs
+            if (prefix === 'http' || prefix === 'https') {
+              allWarnings.push({
+                message: `Shape "${shapeId}", row ${i + 1}: Property ID "${rowData.propertyId}" appears to be a full URI. Consider using a prefixed form.`,
+                severity: 'warning'
+              });
+            } else if (!knownPrefixes.has(prefix) && !unknownNamespaces.includes(prefix)) {
+              unknownNamespaces.push(prefix);
+            }
           }
         }
+
+        rowService.create(workspace.id, shapeId, { ...rowData, rowOrder: i });
+        totalRows++;
       }
-
-      rowService.create(workspace.id, shapeId, { ...rowData, rowOrder: i });
-      totalRows++;
     }
-  }
 
-  // Add placeholder for unknown namespaces
-  for (const prefix of unknownNamespaces) {
-    namespaceService.create(workspace.id, prefix, `http://example.org/${prefix}/`);
-    allWarnings.push({
-      message: `Unknown namespace prefix "${prefix}" - placeholder URI created. You may want to update this in the Namespaces panel.`,
-      severity: 'warning'
-    });
+    // Register any namespaces we didn't recognize, with placeholder URIs
+    for (const prefix of unknownNamespaces) {
+      namespaceService.create(workspace.id, prefix, `http://example.org/${prefix}/`);
+      allWarnings.push({
+        message: `Unknown namespace prefix "${prefix}" - placeholder URI created. You may want to update this in the Namespaces panel.`,
+        severity: 'warning'
+      });
+    }
+  } finally {
+    // Always turn disk writes (flattened into one save) and cache invalidation
+    // back on, even when the import blows up — leave batch mode engaged and
+    // every later save quietly disappears.
+    resumeDbWrites();
+    resumeCacheInvalidation();
   }
-
-  // Resume disk writes (single save) and cache invalidation
-  resumeDbWrites();
-  resumeCacheInvalidation();
 
   return {
     success: true,

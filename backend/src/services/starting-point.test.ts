@@ -61,7 +61,9 @@ vi.mock('./database.js', () => ({
       name,
       createdAt: 1000
     }))
-  }
+  },
+  pauseDbWrites: vi.fn(),
+  resumeDbWrites: vi.fn()
 }));
 
 describe('Starting Point Service', () => {

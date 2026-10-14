@@ -9,7 +9,7 @@ PLAN.md
 .DS_Store
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
-
+SECURITY-ANALYSIS.md
 # Runtime data
 pids
 *.pid

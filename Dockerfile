@@ -6,6 +6,9 @@
 # Frontend build stage
 FROM node:22-alpine AS frontend-builder
 
+# npm 10.9 (bundled with node:22) crashes resolving some trees; use npm 12
+RUN npm install -g npm@12
+
 
 ARG VITE_BASE_PATH=./
 ENV VITE_BASE_PATH=$VITE_BASE_PATH
@@ -30,6 +33,9 @@ RUN npm run build
 # Backend build stage
 FROM node:22-alpine AS backend-builder
 
+# npm 10.9 (bundled with node:22) crashes resolving some trees; use npm 12
+RUN npm install -g npm@12
+
 WORKDIR /app
 
 # Copy workspace manifests and lockfile
@@ -50,6 +56,9 @@ RUN npm run build
 
 # Production stage
 FROM node:22-alpine AS production
+
+# npm 10.9 (bundled with node:22) crashes resolving some trees; use npm 12
+RUN npm install -g npm@12
 
 WORKDIR /app
 
